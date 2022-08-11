@@ -1,5 +1,8 @@
 # Special setting
 data
+amlt
+.amltconfig
+.amltignore
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

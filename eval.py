@@ -2,69 +2,132 @@ import argparse
 import os
 
 import torch
+from torch.utils.data import DataLoader
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GPTNeoForCausalLM, GPT2Tokenizer
 
-from dataset import get_dataset
+from dataset import get_dataset, dataset_dict
 
-from openprompt import PromptDataLoader, PromptForClassification
-from openprompt.plms import LMTokenizerWrapper, load_plm
-from openprompt.prompts import ManualTemplate, ManualVerbalizer
-            
+
+def expand_past_key_value(past_key_value, class_num):
+    """
+    Input sentence's batch is 1. To use the past_key_value for multiple answers, we need to expand the key and value's batch to the class number.
+    """
+    present = ()
+    for layer_past in past_key_value:
+        key = layer_past[0]
+        value = layer_past[1]
+        present += ((key.repeat(class_num, 1, 1, 1), value.repeat(class_num, 1, 1, 1)), )
+
+    return present
+
 
 @torch.no_grad()
-def eval(model, data_loader, device):
+def eval(args, model, data_loader, tokenizer, device):
     model.eval()
     correct = 0
     total = 0
-    for batch in data_loader:
-        batch = batch.to(device)
-        logits, _ = model(batch)
-        preds = torch.argmax(logits, dim = -1)
-        correct += (preds == batch["label"]).sum().item()
-        total += len(batch["label"])
+    for input_str, output_str, answer in data_loader:
+        input_encoding = tokenizer(
+            list(input_str),
+            truncation=True,
+            max_length=args.max_length,
+            return_tensors='pt',
+        ).to(device)
+        answer_encoding = tokenizer(
+            output_str[0],
+            truncation=True,
+            padding=True,
+            max_length=args.max_length,
+            return_tensors='pt',
+        ).to(device)
+        answer = torch.LongTensor(answer).to(device)
+        answer_shape = answer_encoding.input_ids.shape
+
+        output = model(
+            input_ids=input_encoding.input_ids, 
+            use_cache=True
+            )
+        input_logits = output.logits
+
+        if answer_shape[1] > 1: # multi-choice
+            answer_logits = model(
+                input_ids=answer_encoding.input_ids,
+                past_key_values=expand_past_key_value(output.past_key_values, answer_shape[0]), 
+                ).logits
+            logits = torch.cat((input_logits[0, -1:].repeat(answer_shape[0], 1, 1), answer_logits[:, :-1]), dim=1).log_softmax(dim=-1)
+        else:
+            logits = input_logits[0, -1:].repeat(answer_shape[0], 1, 1).log_softmax(dim=-1)
+
+        # select answer
+        logits = logits.view(answer_shape[0] * answer_shape[1], -1)[torch.arange(answer_shape[0] * answer_shape[1]).to(device), answer_encoding.input_ids.flatten()].view(answer_shape)
+        preds = logits.mul(answer_encoding.attention_mask).sum(dim=1).argmax(dim=-1)
+        print(preds, answer)
+        correct += preds.eq(answer).sum().item()
+        total += len(answer)
 
     return correct / total      
 
 def main():
     parser = argparse.ArgumentParser()
+    # Model setting
     parser.add_argument('--model', type=str, default="gpt-j-6B")
-    parser.add_argument('--dataset', type=str, default="boolq")
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument('--parallelize', action='store_true')
+    # Data setting
+    parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--demo_num', type=int, default=10)
-    args = parser.parse_args() 
+    # Parameters
+    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--demo_num', type=int, default=6)
+    parser.add_argument('--repeat_num', type=int, default=5)
+    parser.add_argument('--max_length', type=int, default=8192)
+    args = parser.parse_args()
 
-    dataset_train = get_dataset(args.dataset, is_train=True)
-    dataset_val = get_dataset(args.dataset, is_train=False, demo=dataset_train.get_demo(args.demo_num))
+    model_path = os.path.join(args.data_path, "model", args.model)
+    config = AutoConfig.from_pretrained(model_path)
+    config.max_position_embeddings = args.max_length
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, 
+        config=config, 
+        ignore_mismatched_sizes=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path, 
+        config=config, 
+        use_fast=False)
+
+    model.config.pad_token_id = model.config.eos_token_id
+    tokenizer.pad_token = tokenizer.eos_token
     
-    device = torch.device(args.device)
+    if args.parallelize:
+        model.parallelize()
+        device = torch.device(model.transformer.first_device)
+    else:
+        device = torch.device(args.device)
+        model = model.to(device)
 
-    tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.data_path, "model", args.model), use_fast=False)
-    model = AutoModelForCausalLM.from_pretrained(os.path.join(args.data_path, "model", args.model))
-    prompt_template = ManualTemplate(
-        text = '{"placeholder":"text_a"} {"placeholder":"text_b"} {"mask"}',
-        tokenizer = tokenizer
-    )
-    prompt_verbalizer = ManualVerbalizer(
-        label_words = dataset_val.label_words(),
-        tokenizer = tokenizer
-    )
-    valid_loader = PromptDataLoader(
-        dataset=dataset_val, 
-        tokenizer=tokenizer, 
-        template=prompt_template,
-        tokenizer_wrapper_class=LMTokenizerWrapper,
-        batch_size=args.batch_size)
-    prompt_model = PromptForClassification(
-        template=prompt_template,
-        plm=model,
-        verbalizer=prompt_verbalizer
-    ).to(device)
     print("Model initialized.")
-    acc = eval(prompt_model, valid_loader, device)
-    print("{} accuracy: {}".format(args.dataset, acc))
+    
+    if args.task:
+        dataset_list = [args.task]
+    else:
+        dataset_list = dataset_dict.keys()
+
+    for dataset in dataset_list:
+        dataset_train = get_dataset(dataset, is_train=True)
+        dataset_val = get_dataset(dataset, is_train=False)
+        dataloader_val = DataLoader(dataset_val, args.batch_size, shuffle=False, collate_fn=lambda x: list(zip(*x)))
+        acc_list = []
+        for _ in range(args.repeat_num):
+            dataset_val.demo=dataset_train.get_demo(args.demo_num)
+            acc = eval(args, model, dataloader_val, tokenizer, device)
+            acc_list.append(acc)
+            print(acc)
+
+        print("{} average accuracy: {}".format(dataset, torch.Tensor(acc_list).mean().item()))
+        print("All accuracy: {}".format(acc_list))
+        print(args)
 
 
 if __name__ == "__main__":

@@ -12,9 +12,7 @@ class COPA(BaseTask):
         
 
     def templates_set_without_newline(self):
-        return [
-            ("", " {answer}", ["first", "second"]),
-        ]
+        return None
 
     def preprocess_example(self, example):
         def copa_answer(string):
@@ -31,7 +29,7 @@ class COPA(BaseTask):
             else:
                 text_first = text_first + " so"
             input_str = text_first
-            answer_str = [copa_answer(example["choice1"]), copa_answer(example["choice2"])][example["label"]]
+            answer_str = [copa_answer(example["choice1"]), copa_answer(example["choice2"])]
         elif self.temp_index == 2:
             input_str = [text_first + " What is the " + example["question"] + "?"] * self.class_num
             answer_str = [' ' + example["choice1"], ' ' + example["choice2"]]
@@ -43,7 +41,7 @@ class COPA(BaseTask):
             else:
                 text_first = text_first + " so"
             input_str = text_first
-            answer_str = [' '+example["choice1"], ' '+example["choice2"]][example["label"]]
+            answer_str = [' '+example["choice1"], ' '+example["choice2"]]
         elif self.temp_index == 4:
             if text_first[-1] == '.':
                 text_first = text_first[:-1]
@@ -52,7 +50,7 @@ class COPA(BaseTask):
             else:
                 text_first = text_first + " As a consequence,"
             input_str = text_first
-            answer_str = [copa_answer(example["choice1"]), copa_answer(example["choice2"])][example["label"]]
+            answer_str = [copa_answer(example["choice1"]), copa_answer(example["choice2"])]
         label = example["label"]
         return input_str, answer_str, label
 

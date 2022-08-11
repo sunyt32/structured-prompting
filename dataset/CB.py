@@ -13,8 +13,8 @@ class CB(BaseTask):
 
     def templates_set_without_newline(self):
         return [
-            ("{premise} Question: {hypothesis}. True, False, or Neither? Answer: ", "{answer}", ["True", "False", "Neither"]),
             ("{premise} Based on the paragraph above can we conclude that \"{hypothesis}\"? Yes, No, or Maybe? Answer: ", " {answer}.", ["Yes", "No", "Maybe"]),
+            ("{premise} Question: {hypothesis}. True, False, or Neither? Answer: ", "{answer}", ["True", "False", "Neither"]),
             ("{premise} Can we infer the following? {hypothesis}. ", "{answer}", ["Yes", "No", "Maybe"]),
             ("Read the following paragraph and determine if the hypothesis is true: {premise} Hypothesis: {hypothesis}. ", "{answer}", ["Yes", "No", "Maybe"]),
             ("Can we draw the following hypothesis from the context? Context: {premise} Hypothesis: {hypothesis}. Answer: ", "{answer}", ["Yes", "No", "Maybe"])
@@ -23,7 +23,7 @@ class CB(BaseTask):
     def preprocess_example(self, example):
         input_temp, output_temp, options = self.templates[self.temp_index]
         input_str = input_temp.replace("{premise}", example["premise"]).replace("{hypothesis}", example["hypothesis"])
-        answer_str = output_temp.replace("{answer}", options[example["label"]])
+        answer_str = [output_temp.replace("{answer}", options[i]) for i in range(len(options))]
         label = example["label"]
         return input_str, answer_str, label
 

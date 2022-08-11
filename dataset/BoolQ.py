@@ -22,7 +22,7 @@ class BoolQ(BaseTask):
     def preprocess_example(self, example):
         input_temp, output_temp, options = self.templates[self.temp_index]
         input_str = input_temp.replace("{question}", example["question"]).replace("{passage}", example["passage"])
-        answer_str = output_temp.replace("{answer}", options[example["label"]])
+        answer_str = [output_temp.replace("{answer}", options[i]) for i in range(len(options))]
         label = example["label"]
         return input_str, answer_str, label
 
