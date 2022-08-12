@@ -25,7 +25,7 @@ search:
     sku: G4
     priority: High
     command:
-    - python3 eval.py --demo_num {k} --task {task} --data_path /mnt/yutao/data --parallelize
+    - python3 eval.py --demo_num {k} --task {task} --data_path /mnt/yutao/data --select_method {method} --parallelize
   
   type: grid
   max_trials: 500
@@ -36,6 +36,9 @@ search:
     - name: task
       spec: discrete
       values: ["cb", "boolq"]
+    - name: method
+      spec: discrete
+      values: ["align_feature", "loss_partition"]
 
 # search:
 #   job_template:
