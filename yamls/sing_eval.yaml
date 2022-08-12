@@ -35,8 +35,7 @@ search:
       values: [6, 12, 24]
     - name: task
       spec: discrete
-      values: ["cb"]
-      # values: ["multirc", "boolq", "cb"]
+      values: ["cb", "boolq"]
 
 # search:
 #   job_template:
@@ -54,6 +53,6 @@ search:
 #       values: [6, 12, 24]
 #     - name: task
 #       spec: discrete
-#       values: ["cb", "copa", "wsc"]
+#       values: ["copa"]
   
 

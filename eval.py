@@ -6,20 +6,8 @@ from torch.utils.data import DataLoader
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GPTNeoForCausalLM, GPT2Tokenizer
 
-from dataset import get_dataset, dataset_dict
-
-
-def expand_past_key_value(past_key_value, class_num):
-    """
-    Input sentence's batch is 1. To use the past_key_value for multiple answers, we need to expand the key and value's batch to the class number.
-    """
-    present = ()
-    for layer_past in past_key_value:
-        key = layer_past[0]
-        value = layer_past[1]
-        present += ((key.repeat(class_num, 1, 1, 1), value.repeat(class_num, 1, 1, 1)), )
-
-    return present
+from dataset import get_dataset, align_feature_demo, dataset_dict
+from utils import expand_past_key_value
 
 
 @torch.no_grad()
@@ -62,7 +50,6 @@ def eval(args, model, data_loader, tokenizer, device):
         # select answer
         logits = logits.view(answer_shape[0] * answer_shape[1], -1)[torch.arange(answer_shape[0] * answer_shape[1]).to(device), answer_encoding.input_ids.flatten()].view(answer_shape)
         preds = logits.mul(answer_encoding.attention_mask).sum(dim=1).argmax(dim=-1)
-        print(preds, answer)
         correct += preds.eq(answer).sum().item()
         total += len(answer)
 
@@ -78,7 +65,7 @@ def main():
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--demo_num', type=int, default=6)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=8192)
@@ -117,10 +104,11 @@ def main():
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True)
         dataset_val = get_dataset(dataset, is_train=False)
-        dataloader_val = DataLoader(dataset_val, args.batch_size, shuffle=False, collate_fn=lambda x: list(zip(*x)))
+        dataloader_val = DataLoader(dataset_val, 1, shuffle=False, collate_fn=lambda x: list(zip(*x)))
         acc_list = []
         for _ in range(args.repeat_num):
-            dataset_val.demo=dataset_train.get_demo(args.demo_num)
+            dataset_val.demo = align_feature_demo(args, model, tokenizer, device, dataset_train, dataset_val)
+            # dataset_val.demo=dataset_train.get_demo(args.demo_num)
             acc = eval(args, model, dataloader_val, tokenizer, device)
             acc_list.append(acc)
             print(acc)

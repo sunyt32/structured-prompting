@@ -20,22 +20,26 @@ class BaseTask(Dataset):
         for example in self.dataset:
             self.examples.append(self.preprocess_example(example))
 
-    def get_demo(self, demo_num):
-        random.shuffle(self.examples)
+    def get_demo_from_indices(self, indices):
         demo_str = ""
-        demo_each_label = demo_num / self.class_num
-        label_count = [0 for _ in range(self.class_num)]
-        example_str_list = []
-        for input_str, output_str, label in self.examples:
-            if label_count[label] < demo_each_label:
-                example_str_list.append(input_str + output_str[label] + " ")
-                label_count[label] += 1
-
-        random.shuffle(example_str_list)
-        for example_str in example_str_list:
-            demo_str += example_str
+        random.shuffle(indices)
+        for index in indices:
+            input_str, output_str, label = self.examples[index]
+            demo_str += input_str + output_str[label] + " "
 
         return demo_str
+    
+    def get_demo(self, demo_num):
+        random.shuffle(self.examples)
+        demo_each_label = demo_num / self.class_num
+        label_count = [0 for _ in range(self.class_num)]
+        indices = []
+        for index, _, _, label in enumerate(self.examples):
+            if label_count[label] < demo_each_label:
+                indices.append(index)     
+                label_count[label] += 1
+
+        return self.get_demo_from_indices(indices)
 
     def __len__(self):
         return len(self.examples)
