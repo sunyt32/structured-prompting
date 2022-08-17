@@ -21,7 +21,7 @@ storage:
 
 search:
   job_template:
-    name: many-{task}-balance-k{k}-parallel
+    name: many-{task}-balance-k{k}-parallel-batch-{method}
     sku: G4
     priority: High
     command:
@@ -35,10 +35,10 @@ search:
       values: [6, 12, 24]
     - name: task
       spec: discrete
-      values: ["cb", "boolq"]
+      values: ["cb"]
     - name: method
       spec: discrete
-      values: ["align_feature", "loss_partition"]
+      values: ["align_feature"]
 
 # search:
 #   job_template:

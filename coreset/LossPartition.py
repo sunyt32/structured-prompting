@@ -15,7 +15,7 @@ class LossPartition(CoreSet):
         dataloader_train = DataLoader(dataset_train, 1, shuffle=False, collate_fn=lambda x: list(zip(*x)))
         criterion = CrossEntropyLoss(reduction='none')
         print("Begin to calculate loss...")
-        loss = torch.rand(0).to(device)
+        loss = torch.empty(0).to(device)
         for train_input_str, train_output_str, train_answer in dataloader_train:
             train_input_encoding = tokenizer(
                 list(train_input_str),

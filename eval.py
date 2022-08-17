@@ -4,10 +4,10 @@ import os
 import torch
 from torch.utils.data import DataLoader
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GPTNeoForCausalLM, GPT2Tokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GPTJForCausalLM, GPT2Tokenizer
 
 from dataset import get_dataset, dataset_dict
-from coreset import AlignFeature, LossPartition, RandomSelector
+from coreset import AlignFeature, LossPartition, RandomSelector, SimpleAlignFeature
 from utils import expand_past_key_value
 
 
@@ -65,10 +65,10 @@ def main():
     # Data setting
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
-    parser.add_argument('--sample_num', type=int, default=64)
+    parser.add_argument('--sample_num', type=int, default=512)
     parser.add_argument('--select_method', type=str)
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--demo_num', type=int, default=6)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=8192)
@@ -110,6 +110,8 @@ def main():
         dataloader_val = DataLoader(dataset_val, 1, shuffle=False, collate_fn=lambda x: list(zip(*x)))
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
+        elif args.select_method == "simple_align_feature":
+            selector = SimpleAlignFeature(args, model, tokenizer, device, dataset_train)
         elif args.select_method == "loss_partition":
             selector = LossPartition(args, model, tokenizer, device, dataset_train)
         else:
@@ -117,8 +119,9 @@ def main():
 
         acc_list = []
         for _ in range(args.repeat_num):
-            dataset_val.demo = dataset_train.get_demo_from_indices(selector.get_demo_indices(args.demo_num))
-            print(dataset_val.demo)
+            indices = selector.get_demo_indices(args.demo_num)
+            dataset_val.demo = dataset_train.get_demo_from_indices(indices)
+            print(indices, dataset_val.demo)
             acc = eval(args, model, dataloader_val, tokenizer, device)
             acc_list.append(acc)
             print(acc)
