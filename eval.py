@@ -4,7 +4,7 @@ import os
 import torch
 from torch.utils.data import DataLoader
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GPTJForCausalLM, GPT2Tokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GPTNeoXForCausalLM, GPT2Tokenizer
 
 from dataset import get_dataset, dataset_dict
 from coreset import AlignFeature, LossPartition, RandomSelector, SimpleAlignFeature
@@ -60,23 +60,29 @@ def main():
     parser = argparse.ArgumentParser()
     # Model setting
     parser.add_argument('--model', type=str, default="gpt-j-6B")
-    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--parallelize', action='store_true')
     # Data setting
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
+    parser.add_argument('--log_path', type=str, default="./log/log.txt")
     parser.add_argument('--sample_num', type=int, default=512)
     parser.add_argument('--select_method', type=str)
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--demo_num', type=int, default=6)
     parser.add_argument('--repeat_num', type=int, default=5)
+    parser.add_argument('--max_train_num', type=int, default=512)
+    parser.add_argument('--max_val_num', type=int, default=128)
     parser.add_argument('--max_length', type=int, default=8192)
     args = parser.parse_args()
 
     model_path = os.path.join(args.data_path, "model", args.model)
     config = AutoConfig.from_pretrained(model_path)
-    config.max_position_embeddings = args.max_length
+    if args.model.startswith("gpt-neo-"): # learnable position embedding
+        args.max_length = config.max_position_embeddings
+    else:
+        config.max_position_embeddings = args.max_length
 
     model = AutoModelForCausalLM.from_pretrained(
         model_path, 
@@ -105,8 +111,8 @@ def main():
         dataset_list = dataset_dict.keys()
 
     for dataset in dataset_list:
-        dataset_train = get_dataset(dataset, is_train=True)
-        dataset_val = get_dataset(dataset, is_train=False)
+        dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
+        dataset_val = get_dataset(dataset, is_train=False, max_data_num=args.max_val_num)
         dataloader_val = DataLoader(dataset_val, 1, shuffle=False, collate_fn=lambda x: list(zip(*x)))
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
@@ -125,10 +131,12 @@ def main():
             acc = eval(args, model, dataloader_val, tokenizer, device)
             acc_list.append(acc)
             print(acc)
-
+ 
         print("{} average accuracy: {}".format(dataset, torch.Tensor(acc_list).mean().item()))
         print("All accuracy: {}".format(acc_list))
         print(args)
+        with open(args.log_path, 'w') as fp:
+            fp.write(str(torch.Tensor(acc_list).mean().item()))
 
 
 if __name__ == "__main__":

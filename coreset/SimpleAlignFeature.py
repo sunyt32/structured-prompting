@@ -96,7 +96,7 @@ class SimpleAlignFeature(CoreSet):
         for index in indices:
             _, _, label = self.dataset_train.examples[index]
             if label_count[label] < demo_each_label:
-                final_indices.append(index)     
+                final_indices.append(index.item())     
                 label_count[label] += 1
 
         return final_indices

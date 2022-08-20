@@ -70,7 +70,7 @@ class LossPartition(CoreSet):
                 for index in sub_indices:
                     _, _, label = self.dataset_train.examples[index]
                     if label == expect_label.item():
-                        final_indices.append(index)
+                        final_indices.append(index.item())
                         break
 
             if len(final_indices) == demo_num:
