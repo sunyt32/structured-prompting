@@ -1,6 +1,3 @@
-import torch
-
-
 def expand_past_key_value(past_key_value, class_num):
     """
     Input sentence's batch is 1. To use the past_key_value for multiple answers, we need to expand the key and value's batch to the class number.
@@ -12,4 +9,3 @@ def expand_past_key_value(past_key_value, class_num):
         present += ((key.expand(class_num, -1, -1, -1), value.expand(class_num, -1, -1, -1)), )
 
     return present
-    

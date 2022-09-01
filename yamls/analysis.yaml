@@ -22,30 +22,23 @@ storage:
 
 search:
   job_template:
-    name: core-{task}-k{k}-{method}-{model}
+    name: analysis-{task}
     sku: G1
     priority: High
     command:
-    - python3 eval.py --demo_num {k} --task {task} --model {model} --batch 4
+    - python3 analysis.py --task {task} --model {model}
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_{method}.json
-     --select_method {method}
+     --log_path /mnt/yutao/core-shot/log/analysis_{task}_{model}.json
   
   type: grid
   max_trials: 500
   params:
-    - name: k
-      spec: discrete
-      values: [6, 12]
     - name: task
       spec: discrete
-      values: ["cb"]
-    - name: method
-      spec: discrete
-      values: ["align_feature"]
+      values: ["sst2", "cb", "trec", "agnews"]
     - name: model
       spec: discrete
-      values: ["opt-6.7b"]
+      values: ["gpt-j-6B"]
 
   
 

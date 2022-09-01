@@ -23,11 +23,8 @@ def main():
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str, default="./log/log.json")
     parser.add_argument('--sample_num', type=int, default=512)
-    parser.add_argument('--select_method', type=str)
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--demo_num', type=int, default=6)
-    parser.add_argument('--repeat_num', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=2)
     parser.add_argument('--max_train_num', type=int, default=512)
     parser.add_argument('--max_val_num', type=int, default=128)
     parser.add_argument('--max_length', type=int, default=2048)
@@ -64,39 +61,18 @@ def main():
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
         dataset_val = get_dataset(dataset, is_train=False, max_data_num=args.max_val_num)
-        if args.select_method == "align_feature":
-            selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
-        elif args.select_method == "align_feature_validation":
-            selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val, validation=True)
-        elif args.select_method == "balance_align_feature":
-            selector = BalanceAlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
-        elif args.select_method == "simple_align_feature":
-            selector = SimpleAlignFeature(args, model, tokenizer, device, dataset_train)
-        elif args.select_method == "loss_partition":
-            selector = LossPartition(args, model, tokenizer, device, dataset_train)
-        elif args.select_method == "loss_sampling":
-            selector = LossSampling(args, model, tokenizer, device, dataset_train)
-        elif args.select_method == "random_validation":
-            selector = RandomSelector(dataset_train, model, tokenizer, device, validation=True)
-        elif args.select_method == "random":
-            selector = RandomSelector(dataset_train)
-        else:
-            raise NotImplementedError()
+        selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
+        dataset_train_core = []
+        for index in selector.indices:
+            dataset_train_core.append(dataset_train.examples[index])
 
-        acc_list = []
-        for _ in range(args.repeat_num):
-            indices = selector.get_demo_indices(args.demo_num)
-            dataset_val.demo = dataset_train.get_demo_from_indices(indices)
-            print(indices, dataset_val.demo)
-            acc = validation(model, dataset_val, tokenizer, device)
-            acc_list.append({
-                "acc": acc
-            })
-            print(acc)
+        acc_whole = validation(model, dataset_train, tokenizer, device)
+        acc_core = validation(model, dataset_train_core, tokenizer, device)
+        print(acc_whole, acc_core)
  
         log_dict = {
-            "acc": torch.Tensor([item["acc"] for item in acc_list]).mean().item(),
-            "details": acc_list
+            "acc_whole": acc_whole,
+            "acc_core": acc_core
         }
         print(args)
         print(log_dict)

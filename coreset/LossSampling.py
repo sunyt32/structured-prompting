@@ -8,7 +8,7 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 
 
-class LossPartition(CoreSet):
+class LossSampling(CoreSet):
     @torch.no_grad()
     def __init__(self, args, model, tokenizer, device, dataset_train):
         model.eval()
@@ -56,23 +56,23 @@ class LossPartition(CoreSet):
             logits = logits.mul(answer_encoding.attention_mask).sum(dim=1).unsqueeze(0)
             loss = torch.cat((loss, criterion(logits, answer)))
             
-        indices = loss.sort(dim=0).indices
-        self.indices = indices.cpu()
+        _, indices = torch.sort(loss, dim=0, descending=True)
+        self.indices = indices.cpu().tolist()
         self.dataset_train = dataset_train
     
     def get_demo_indices(self, demo_num):
         demo_each_label = demo_num // self.dataset_train.class_num
-        label_class = torch.arange(self.dataset_train.class_num).repeat(demo_each_label)
-        while True:
-            random.shuffle(label_class)
-            final_indices = []
-            for sub_indices, expect_label in zip(self.indices.chunk(demo_num), label_class):
-                for index in sub_indices:
-                    _, _, label = self.dataset_train.examples[index]
-                    if label == expect_label.item():
-                        final_indices.append(index.item())
-                        break
+        label_count = [0 for _ in range(self.dataset_train.class_num)]
+        label_max = [demo_each_label for _ in range(self.dataset_train.class_num)]
+        for index in range(demo_num - self.dataset_train.class_num * demo_each_label):
+            label_max[index] += 1
 
-            if len(final_indices) == demo_num:
-                return final_indices
+        final_indices = []
+        for index in self.indices:
+            _, _, label = self.dataset_train.examples[index]
+            if label_count[label] < label_max[label]:
+                final_indices.append(index)     
+                label_count[label] += 1
+
+        return final_indices
 

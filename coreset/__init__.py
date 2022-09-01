@@ -2,5 +2,7 @@ from .CoreSet import CoreSet
 from .SimpleAlignFeature import SimpleAlignFeature
 from .AlignFeature import AlignFeature
 from .LossPartition import LossPartition
+from .LossSampling import LossSampling
 from .RandomSelector import RandomSelector
+from .BalanceAlignFeature import BalanceAlignFeature
 
