@@ -22,13 +22,13 @@ storage:
 
 search:
   job_template:
-    name: core-{task}-k{k}-parallel-{method}
+    name: core-{task}-dynamic-k{k}-{method}
     sku: G4
     priority: High
     command:
-    - python3 eval.py --demo_num {k} --task {task} --model {model}
+    - python3 eval_dynamic.py --demo_num {k} --task {task} --model {model}
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_{method}.json
+     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_dynamic_{method}.json
      --select_method {method} --parallelize
   
   type: grid
@@ -39,7 +39,7 @@ search:
       values: [6, 12, 24]
     - name: task
       spec: discrete
-      values: ["cb", "sst2", "sst5", "subj"]
+      values: ["cb", "copa", "sst2", "sst5"]
     - name: method
       spec: discrete
       values: ["align_feature"]

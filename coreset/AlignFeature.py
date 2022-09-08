@@ -1,5 +1,6 @@
 from . import CoreSet
-from utils import expand_past_key_value
+from utils import validate
+from utils.functional import expand_past_key_value
 
 import random
 
@@ -8,32 +9,48 @@ from torch.utils.data import DataLoader
 
 
 class AlignFeature(CoreSet):
-    @torch.no_grad()
-    def __init__(self, args, model, tokenizer, device, dataset_train, dataset_val):
+    def __init__(self, args, model, tokenizer, device, dataset_train, dataset_val, val=False, dynamic=False):
         self.dataset_train = dataset_train
-        dataloader_val = DataLoader(dataset_val, args.batch_size, shuffle=True, collate_fn=lambda x: list(zip(*x)))
-        metric = torch.zeros(len(self.dataset_train)).to(device)
-        model.eval()
-        print("Begin to calculate feature metrics for training set size {}, val set size {}...".format(len(self.dataset_train), len(self.dataset_val)))
-        for index, (val_input_str, _, _) in enumerate(dataloader_val):
-            if index >= args.sample_num:
-                break
-            
-            val_input_encoding = tokenizer(
-                list(val_input_str),
+        self.dynamic = dynamic
+        self.val = val
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        if not dynamic:
+            dataloader_val = DataLoader(dataset_val, args.batch_size, shuffle=True, collate_fn=lambda x: list(zip(*x)))
+            _, loss = validate(model, dataset_train, tokenizer, device, output_loss=True)
+            metric = torch.zeros(len(self.dataset_train)).to(device)
+            model.eval()
+            print("Begin to calculate feature metrics for training set size {}, val set size {}...".format(len(dataset_train), len(dataset_val)))
+            for index, (val_input_str, _, _) in enumerate(dataloader_val):
+                if index >= args.sample_num:
+                    break
+                
+                metric += self.get_metric(model, device, tokenizer, dataset_train, val_input_str, weight_vector=loss)
+                
+            _, align_indices = torch.sort(metric, dim=0)
+            self.indices = align_indices.cpu().tolist()[:args.coreset_size]
+    
+    @staticmethod
+    def get_metric(model, device, tokenizer, dataset_train, val_input_str, weight_vector = None):
+        metric = torch.zeros(len(dataset_train)).to(device)
+        if weight_vector is None:
+            weight_vector = torch.ones(len(dataset_train)).to(device)
+
+        val_input_encoding = tokenizer(
+            list(val_input_str),
+            truncation=True,
+            padding=True,
+            return_tensors='pt',
+        ).to(device)
+        all_past_hidden_states = []
+        for train_input_str, train_output_str, train_answer in dataset_train:
+            train_input_encoding = tokenizer(
+                [train_input_str + train_output_str[train_answer] + '\n'],
                 truncation=True,
-                padding=True,
-                max_length=args.max_length,
                 return_tensors='pt',
             ).to(device)
-            all_past_hidden_states = []
-            for index, (train_input_str, train_output_str, train_answer) in enumerate(self.dataset_train):
-                train_input_encoding = tokenizer(
-                    [train_input_str + train_output_str[train_answer]],
-                    truncation=True,
-                    max_length=args.max_length,
-                    return_tensors='pt',
-                ).to(device)
+            with torch.no_grad():
                 past_key_values = model(
                     input_ids=train_input_encoding.input_ids, 
                     use_cache=True
@@ -44,44 +61,41 @@ class AlignFeature(CoreSet):
                     output_hidden_states=True
                     )
 
-                all_past_hidden_states.append(val_output.hidden_states[-1].to(device)[torch.where(val_input_encoding.attention_mask)].cpu())
-                # hidden_states = torch.empty(0)
-                # for current in val_output.hidden_states:
-                #     hidden_states = torch.cat((hidden_states, current.flatten().cpu()))
+            all_past_hidden_states.append(val_output.hidden_states[-1].half().to(device)[torch.where(val_input_encoding.attention_mask)].flatten().cpu())
 
-                # all_past_hidden_states.append(hidden_states)
+        sum_hidden_states = torch.zeros(all_past_hidden_states[0].shape).to(device) # dim
+        norm_square = torch.empty(0).to(device)
+        for weight, hidden_states in zip(weight_vector, all_past_hidden_states):
+            hidden_states = hidden_states.to(device)
+            sum_hidden_states += weight * hidden_states
+            norm_square = torch.cat((norm_square, hidden_states.square().sum().unsqueeze(0)), dim=0)
 
-            sum_hidden_states = torch.zeros(all_past_hidden_states[0].shape).to(device) # length * dim
-            norm_square = torch.empty(0, sum_hidden_states.shape[0]).to(device) # size * length
-            for hidden_states in all_past_hidden_states:
-                hidden_states = hidden_states.to(device)
-                sum_hidden_states += hidden_states
-                norm_square = torch.cat((norm_square, hidden_states.square().sum(dim=-1).unsqueeze(0)), dim=0)
+        sum_hidden_states /= torch.sum(weight)
+        metric += norm_square
+        for index, hidden_states in enumerate(all_past_hidden_states):
+            hidden_states = hidden_states.to(device)
+            metric[index] -= 2 * torch.sum(sum_hidden_states * hidden_states)
 
-            metric += torch.sum(norm_square * len(self.dataset_train) + torch.sum(norm_square, dim=0, keepdim=True), dim=1)
-            for index, hidden_states in enumerate(all_past_hidden_states):
-                hidden_states = hidden_states.to(device)
-                metric[index] -= 2 * torch.sum(sum_hidden_states * hidden_states)
+        return metric
 
+    def get_dynamic_indices(self, val_input_str, demo_num):
+        metric = self.get_metric(self.model, self.device, self.tokenizer, self.dataset_train, val_input_str)
         _, indices = torch.sort(metric, dim=0)
-        self.indices = indices.cpu().tolist()
-        # self.indices = self.get_demo_indices(32, False)
+        return self.get_demo_indices(demo_num, indices.cpu().tolist())
+    
+    def get_demo_indices(self, demo_num):
+        if self.val:
+            acc_max = 0
+            for _ in range(10):
+                indices = random.sample(self.indices, demo_num)
+                self.dataset_train.demo = self.dataset_train.get_demo_from_indices(indices)
+                acc = validate(self.model, self.dataset_train, self.tokenizer, self.device)
+                if acc > acc_max:
+                    acc_max = acc
+                    best_indices = indices
 
-    def get_demo_indices(self, demo_num, shuffle=False):
-        if shuffle:
-            random.shuffle(self.indices)
+            return best_indices
+        else:
+            indices = random.sample(self.indices, demo_num)
+            return indices
 
-        demo_each_label = demo_num // self.dataset_train.class_num
-        label_count = [0 for _ in range(self.dataset_train.class_num)]
-        label_max = [demo_each_label for _ in range(self.dataset_train.class_num)]
-        for index in range(demo_num - self.dataset_train.class_num * demo_each_label):
-            label_max[index] += 1
-
-        final_indices = []
-        for index in self.indices:
-            _, _, label = self.dataset_train.examples[index]
-            if label_count[label] < label_max[label]:
-                final_indices.append(index)     
-                label_count[label] += 1
-
-        return final_indices

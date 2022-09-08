@@ -22,13 +22,13 @@ storage:
 
 search:
   job_template:
-    name: {task}-balance-k{k}-{method}-{model}
+    name: core-{task}-k{k}-{method}-{model}
     sku: G1
     priority: High
     command:
-    - python3 eval.py --demo_num {k} --task {task} --model {model} --batch 4
+    - python3 eval.py --demo_num {k} --task {task} --model {model} --batch 2
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/many-shot/log/{task}_{k}_{model}_{method}.txt
+     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_{method}.json
      --select_method {method}
   
   type: grid
@@ -39,13 +39,13 @@ search:
       values: [6, 12, 24]
     - name: task
       spec: discrete
-      values: ["cb", "copa", "rte", "sst2", "sst5", "agnews", "trec", "subj"]
+      values: ["cb", "sst2", "sst5", "subj"]
     - name: method
       spec: discrete
-      values: ["align_feature"]
+      values: ["align_embedding"]
     - name: model
       spec: discrete
-      values: ["gpt-neo-2.7B"]
+      values: ["gpt-j-6B"]
 
   
 

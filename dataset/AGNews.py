@@ -13,7 +13,7 @@ class AGNews(BaseTask):
 
     def templates_set_without_newline(self):
         return [
-            ("Classify the news articles into the categories of World, Sports, Business, and Technology. Article: {text} Answer:", " {answer}", ["World", "Sports", "Business", "Technology"])
+            ("Article: {text} Category:", " {answer}", ["World", "Sports", "Business", "Technology"])
         ]
 
     def preprocess_example(self, example):

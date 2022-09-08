@@ -1,5 +1,5 @@
 from . import CoreSet
-from utils import expand_past_key_value
+from utils.functional import expand_past_key_value
 
 import torch
 import torch.nn as nn
