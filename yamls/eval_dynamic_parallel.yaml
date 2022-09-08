@@ -22,7 +22,7 @@ storage:
 
 search:
   job_template:
-    name: core-{task}-dynamic-k{k}-parallel-batch-{method}
+    name: core-{task}-dynamic-k{k}-{method}
     sku: G4
     priority: High
     command:

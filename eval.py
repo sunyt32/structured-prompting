@@ -9,8 +9,8 @@ from models import OPTForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer, GPTJForCausalLM, GPT2Tokenizer
 
 from dataset import get_dataset, dataset_dict
-from coreset import AlignFeature, RandomSelector, SimpleAlignFeature, BalanceAlignFeature, LossPartition, LossSampling
-from utils import validation
+from coreset import AlignFeature, RandomSelector, SimpleAlignFeature, BalanceAlignFeature, LossPartition, LossSampling, AlignEmbedding
+from utils import validate
 
 def main():
     parser = argparse.ArgumentParser()
@@ -67,7 +67,11 @@ def main():
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
         elif args.select_method == "align_feature_validation":
-            selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val, validation=True)
+            selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val, val=True)
+        elif args.select_method == "align_embedding":
+            selector = AlignEmbedding(args, model, tokenizer, device, dataset_train)
+        elif args.select_method == "align_embedding_validation":
+            selector = AlignEmbedding(args, model, tokenizer, device, dataset_train, val=True)
         elif args.select_method == "balance_align_feature":
             selector = BalanceAlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
         elif args.select_method == "simple_align_feature":
@@ -77,7 +81,7 @@ def main():
         elif args.select_method == "loss_sampling":
             selector = LossSampling(args, model, tokenizer, device, dataset_train)
         elif args.select_method == "random_validation":
-            selector = RandomSelector(dataset_train, model, tokenizer, device, validation=True)
+            selector = RandomSelector(dataset_train, model, tokenizer, device, val=True)
         elif args.select_method == "random":
             selector = RandomSelector(dataset_train)
         else:
@@ -88,7 +92,7 @@ def main():
             indices = selector.get_demo_indices(args.demo_num)
             dataset_val.demo = dataset_train.get_demo_from_indices(indices)
             print(indices, dataset_val.demo)
-            acc = validation(model, dataset_val, tokenizer, device)
+            acc = validate(model, dataset_val, tokenizer, device)
             acc_list.append({
                 "acc": acc
             })

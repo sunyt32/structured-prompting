@@ -10,7 +10,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GPTJForCausalLM, G
 
 from dataset import get_dataset, dataset_dict
 from coreset import AlignFeature, RandomSelector, SimpleAlignFeature, BalanceAlignFeature, LossPartition, LossSampling
-from utils import validation
+from utils import validate
 
 def main():
     parser = argparse.ArgumentParser()
@@ -66,8 +66,8 @@ def main():
         for index in selector.indices:
             dataset_train_core.append(dataset_train.examples[index])
 
-        acc_whole = validation(model, dataset_train, tokenizer, device)
-        acc_core = validation(model, dataset_train_core, tokenizer, device)
+        acc_whole = validate(model, dataset_train, tokenizer, device)
+        acc_core = validate(model, dataset_train_core, tokenizer, device)
         print(acc_whole, acc_core)
  
         log_dict = {

@@ -35,7 +35,7 @@ search:
   params:
     - name: task
       spec: discrete
-      values: ["sst2", "cb", "trec", "agnews"]
+      values: ["cb", "sst2", "sst5", "subj", "agnews"]
     - name: model
       spec: discrete
       values: ["gpt-j-6B"]

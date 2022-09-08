@@ -1,13 +1,17 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.nn import CrossEntropyLoss
 
 from .functional import expand_past_key_value
 
 @torch.no_grad()
-def validation(model, dataset, tokenizer, device):
+def validate(model, dataset, tokenizer, device, output_loss=False):
     model.eval()
     correct = 0
     total = 0
+    if output_loss:
+        criterion = CrossEntropyLoss(reduction='none')
+        loss = torch.empty(0).to(device)
+
     for input_str, output_str, answer in dataset:
         input_encoding = tokenizer(
             [input_str],
@@ -40,8 +44,15 @@ def validation(model, dataset, tokenizer, device):
 
         # select answer
         logits = logits.view(answer_shape[0] * answer_shape[1], -1)[torch.arange(answer_shape[0] * answer_shape[1]).to(device), answer_encoding.input_ids.flatten()].view(answer_shape)
-        preds = logits.mul(answer_encoding.attention_mask).sum(dim=1).argmax(dim=-1)
+        logits = logits.mul(answer_encoding.attention_mask).sum(dim=1).unsqueeze(0)
+        preds = logits.argmax(dim=-1)
         correct += preds.eq(answer).sum().item()
         total += len(answer)
+        if output_loss:
+            loss = torch.cat((loss, criterion(logits, answer)))
 
-    return correct / total
+    acc = correct / total
+    if output_loss:
+        return acc, loss
+    else:
+        return acc

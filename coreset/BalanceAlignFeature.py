@@ -92,7 +92,5 @@ class BalanceAlignFeature(CoreSet):
 
         return current_indices
 
-
-
     def get_demo_indices(self):
         raise NotImplementedError()
