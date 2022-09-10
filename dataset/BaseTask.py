@@ -44,7 +44,7 @@ class BaseTask(Dataset):
 
     def get_max_length(self, tokenizer):
         return max(len(tokenizer(
-                [input_str + candidate_str for candidate_str in output_str],
+                [input_str +" " + candidate_str for candidate_str in output_str],
                 padding=True
             ).input_ids[0]) for input_str, output_str, _ in self.examples)
             

@@ -17,32 +17,32 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
     correct = 0
     total = 0
     for input_str, output_str, answer in dataset:
-        input_ids = tokenizer(input_str).input_ids
-        answer = torch.LongTensor([answer]).to(device)
+        input_encoding = tokenizer(
+            input_str,
+            return_tensors='pt',
+        ).input_ids.to(device)
         all_logits = torch.empty(0).to(device)
         for candidate_str in output_str:
-            candidate_ids = tokenizer(candidate_str).input_ids
-            input_encoding = torch.LongTensor(input_ids + candidate_ids).unsqueeze(0).to(device)
-            answer_encoding = tokenizer(
+            candidate_encoding = tokenizer(
                 candidate_str,
                 return_tensors='pt',
-            ).to(device)
+            ).input_ids.to(device)
             with torch.cuda.amp.autocast():
                 logits = model(
-                    input_ids=input_encoding,
+                    input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
                     past_key_values=past_key_values,
                     prefix_parallel=chunk_num
                     ).logits
 
-            logits = logits[0, len(input_ids): -1].log_softmax(dim=-1)
+            logits = logits[0, (input_encoding.shape[1] - 1): -1].log_softmax(dim=-1)
             # select answer
-            logits = logits[torch.arange(logits.shape[0]).to(device), answer_encoding.input_ids]
-            all_logits = torch.cat((all_logits, torch.sum(logits, dim=1)), dim=0)
+            logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
+            all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
         preds = all_logits.argmax(dim=-1)
-        correct += preds.eq(answer).sum().item()
-        total += len(answer)
-
+        correct += int(preds.item() == answer)
+        total += 1
+        
     acc = correct / total
     return acc
 
@@ -56,7 +56,7 @@ def main():
     # Data setting
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
-    parser.add_argument('--log_path', type=str, default="./log/log.json")
+    parser.add_argument('--log_path', type=str)
     parser.add_argument('--sample_num', type=int, default=512)
     parser.add_argument('--select_method', type=str, default="random")
     # Parameters
@@ -147,7 +147,7 @@ def main():
                 all_past_key_values.append(past_key_values)
 
             all_past_key_values = select_past_key_value(all_past_key_values, 1, torch.ones(demo_encoding_batch.shape))
-            acc = validate(model, dataset_val, tokenizer, device, all_past_key_values, len(demo_encoding))
+            acc = validate(model, dataset_val, tokenizer, device, all_past_key_values, len(demo_encoding_batch))
             acc_list.append(acc)
             print(acc)
  
@@ -157,8 +157,9 @@ def main():
         }
         print(args)
         print(log_dict)
-        with open(args.log_path, 'w') as fp:
-            fp.write(json.dumps(log_dict, indent=1))
+        if args.log_path:
+            with open(args.log_path, 'w') as fp:
+                fp.write(json.dumps(log_dict, indent=1))
 
 
 if __name__ == "__main__":

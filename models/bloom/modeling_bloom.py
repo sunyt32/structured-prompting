@@ -122,7 +122,7 @@ def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device,
     # https://github.com/huggingface/transformers/blob/f681437203baa7671de3174b0fa583c349d9d5e1/src/transformers/models/t5/modeling_t5.py#L527
     # batch_size = 1, n_head = n_head, query_length
     # attention_mask = [batch, past_length + current_length]
-    if prefix_parallel is not None:
+    if prefix_parallel is not None and prefix_parallel > 1:
         current_length = attention_mask.shape[1] - past_key_values_length
         real_past_key_values_length = past_key_values_length // prefix_parallel
         arange_tensor = torch.arange(0, real_past_key_values_length).repeat(prefix_parallel)
