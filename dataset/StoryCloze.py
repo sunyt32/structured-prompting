@@ -5,7 +5,7 @@ from . import BaseTask
 class StoryCloze(BaseTask):
     def __init__(self, is_train=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        dataset = load_dataset('story_cloze', '2016')
+        dataset = load_dataset('story_cloze', '2016', data_dir="./data/StoryCloze")
         self.dataset = dataset['validation'] if is_train else dataset['test']
         self.class_num = 2
         self.preprocess_dataset()

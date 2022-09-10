@@ -23,10 +23,10 @@ storage:
 search:
   job_template:
     name: many-{task}-k{k}-{method}-{model}
-    sku: G1
+    sku: G4
     priority: High
     command:
-    - python3 eval_many.py --coreset_size {k} --task {task} --model {model} --chunk
+    - python3 eval_many.py --coreset_size {k} --task {task} --model {model} --chunk --parallel
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{method}.json
      --select_method {method}
@@ -39,7 +39,7 @@ search:
       values: [500, 1000, 2000]
     - name: task
       spec: discrete
-      values: ["sst2", "sst5", "boolq", "subj", "trec", "hellaswag", "piqa", "copa", "winogrande", "dbpedia", "agnews", "rte", "cb", "mr", "arcc", "arce", "obqa"]
+      values: ["dbpedia", "boolq", "hellaswag", "arce", "rte", "arcc", "cb", "agnews"]
     - name: method
       spec: discrete
       values: ["random"]

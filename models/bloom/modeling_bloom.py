@@ -83,7 +83,7 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int = None):
     return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
 
 
-def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device) -> torch.Tensor:
+def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device, past_key_values_length: int, prefix_parallel: int = None) -> torch.Tensor:
     """
     Link to paper: https://arxiv.org/abs/2108.12409 Alibi tensor is not causal as the original paper mentions, it
     relies on a translation invariance of softmax for quick implementation: with l being a tensor, and a fixed value
@@ -121,8 +121,16 @@ def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device)
     # This is more or less identical to T5's relative position bias:
     # https://github.com/huggingface/transformers/blob/f681437203baa7671de3174b0fa583c349d9d5e1/src/transformers/models/t5/modeling_t5.py#L527
     # batch_size = 1, n_head = n_head, query_length
-
-    arange_tensor = (attention_mask.cumsum(-1)[:, None, :].to(device) - 1) * attention_mask[:, None]
+    # attention_mask = [batch, past_length + current_length]
+    if prefix_parallel is not None:
+        current_length = attention_mask.shape[1] - past_key_values_length
+        real_past_key_values_length = past_key_values_length // prefix_parallel
+        arange_tensor = torch.arange(0, real_past_key_values_length).repeat(prefix_parallel)
+        arange_tensor = torch.cat((arange_tensor, 
+        torch.arange(real_past_key_values_length, real_past_key_values_length + current_length)), dim=0)
+        arange_tensor = arange_tensor.to(device) * attention_mask[:, None]
+    else:
+        arange_tensor = (attention_mask.cumsum(-1)[:, None, :].to(device) - 1) * attention_mask[:, None]
     alibi = slopes.unsqueeze(-1) * arange_tensor
     alibi = alibi * attention_mask[:, None]
     return alibi.reshape(alibi.shape[0] * n_head, 1, -1).to(dtype)
@@ -272,14 +280,12 @@ class BloomAttention(nn.Module):
         head_mask=None,
         use_cache=False,
         output_attentions=False,
-        multiply_tgt=None
+        prefix_parallel=None
     ):
         alibi = alibi.to(hidden_states.device)  # to make the model possible to run under accelerate
         fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
-
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self._split_heads(fused_qkv)
-
         if layer_past is not None:
             past_key, past_value = layer_past
             # concatenate along seq_length dimension -> [batch_size, qk_length, num_heads, head_dim]
@@ -298,27 +304,25 @@ class BloomAttention(nn.Module):
             key_layer.permute(0, 2, 3, 1).reshape(-1, key_layer.shape[3], key_layer.shape[1]),
         ) + beta * alibi
         # change view to [batch_size, num_heads, q_length, k_length]
-        attention_scores = matmul_result.view(-1, self.num_heads, matmul_result.size(1), matmul_result.size(2))
-
+        attn_weights = matmul_result.view(-1, self.num_heads, matmul_result.size(1), matmul_result.size(2))
         # We replace the scaled softmax by just a few line of code - [batch_size, num_heads, q_length, k_length]
-        input_dtype = attention_scores.dtype
-        if multiply_tgt is not None:
-            attn_weights = attention_scores * self.layer_number
+        input_dtype = attn_weights.dtype
+        if prefix_parallel is not None:
+            attn_weights = attn_weights * self.layer_number
             past_key_values_length = layer_past[0].shape[1]
             means, _ = torch.max(attn_weights.float(), -1, keepdim=True)
-            exp_res = torch.exp(attn_weights.float() - means)
-            exp_res[:, :, past_key_values_length:] = exp_res[:, :, past_key_values_length:] * multiply_tgt
-            exp_res = exp_res * (~attention_mask.bool())
-            exp_sum_res = torch.sum(exp_res, -1, keepdim=True)
-            attention_probs = exp_res / exp_sum_res
+            attn_weights = torch.exp(attn_weights.float() - means)
+            attn_weights[:, :, past_key_values_length:] = attn_weights[:, :, past_key_values_length:] * prefix_parallel
+            attn_weights = attn_weights * (~attention_mask.bool())
+            attn_weights_sum = torch.sum(attn_weights, -1, keepdim=True)
+            attention_probs = attn_weights / attn_weights_sum
         else:
-            attn_weights = (attention_scores * self.layer_number) + attention_mask
+            attn_weights = (attn_weights * self.layer_number) + attention_mask
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
             attention_probs = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(input_dtype)
             attention_probs = attention_probs * (~attention_mask.bool())
         # [batch_size, num_heads, q_length, k_length]
         attention_probs = self.attention_dropout(attention_probs)
-
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
@@ -332,7 +336,6 @@ class BloomAttention(nn.Module):
 
         # change view [batch_size, num_heads, q_length, head_dim]
         context_layer = self._merge_heads(context_layer)
-
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
             slices = context_layer.shape[-1] / self.pretraining_tp
@@ -409,7 +412,7 @@ class BloomBlock(nn.Module):
         use_cache=False,
         output_attentions=False,
         alibi=None,
-        multiply_tgt=None,
+        prefix_parallel=None,
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
 
@@ -432,7 +435,7 @@ class BloomBlock(nn.Module):
             head_mask=head_mask,
             use_cache=use_cache,
             output_attentions=output_attentions,
-            multiply_tgt=multiply_tgt,
+            prefix_parallel=prefix_parallel,
         )
 
         attention_output = attn_outputs[0]
@@ -668,7 +671,7 @@ class BloomModel(BloomPreTrainedModel):
         head_mask=None,
         inputs_embeds=None,
         use_cache=None,
-        multiply_tgt=None,
+        prefix_parallel=None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -722,12 +725,12 @@ class BloomModel(BloomPreTrainedModel):
         else:
             attention_mask = attention_mask.to(hidden_states.device)
 
-        alibi = build_alibi_tensor(attention_mask, self.n_head, hidden_states.dtype, hidden_states.device)
+        alibi = build_alibi_tensor(attention_mask, self.n_head, hidden_states.dtype, hidden_states.device, past_key_values_length, prefix_parallel)
 
         causal_mask = self._prepare_attn_mask(attention_mask, input_shape, inputs_embeds, past_key_values_length)
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
-            
+
             if self.model_parallel:
                 torch.cuda.set_device(hidden_states.device)
 
@@ -735,8 +738,7 @@ class BloomModel(BloomPreTrainedModel):
             if layer_past is not None:
                 layer_past = tuple(past_state.to(hidden_states.device) for past_state in layer_past)
             # Ensure that attention_mask is always on the same device as hidden_states
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(hidden_states.device)
+            causal_mask = causal_mask.to(hidden_states.device)
             if isinstance(head_mask, torch.Tensor):
                 head_mask = head_mask.to(hidden_states.device)
 
@@ -774,7 +776,7 @@ class BloomModel(BloomPreTrainedModel):
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                     alibi=alibi,
-                    multiply_tgt=multiply_tgt
+                    prefix_parallel=prefix_parallel
                 )
 
             hidden_states = outputs[0]
@@ -894,7 +896,7 @@ class BloomForCausalLM(BloomPreTrainedModel):
         inputs_embeds=None,
         labels=None,
         use_cache=None,
-        multiply_tgt=None,
+        prefix_parallel=None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -915,13 +917,12 @@ class BloomForCausalLM(BloomPreTrainedModel):
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
-            multiply_tgt=multiply_tgt,
+            prefix_parallel=prefix_parallel,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
         hidden_states = transformer_outputs[0]
-
         if self.model_parallel:
             torch.cuda.set_device(self.transformer.first_device)
             hidden_states = hidden_states.to(self.lm_head.weight.device)

@@ -18,6 +18,6 @@ class Winogrande(BaseTask):
         text_first = example["sentence"][:cut_index]
         text_second = example["sentence"][cut_index+1:]
         input_str = text_first
-        answer_str = [example["option1"] + text_second, example["option2"] + text_second]
+        answer_str = [" " + example["option1"] + text_second, " " + example["option2"] + text_second]
         label = int(example["answer"]) - 1
         return input_str, answer_str, label

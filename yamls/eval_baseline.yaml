@@ -39,7 +39,7 @@ search:
       values: [500, 1000, 2000]
     - name: task
       spec: discrete
-      values: ["trec", "sst2", "sst5", "subj"]
+      values: ["sst2", "sst5", "boolq", "subj", "trec", "hellaswag", "piqa", "copa", "winogrande", "dbpedia", "agnews", "rte", "cb", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
       values: ["random"]

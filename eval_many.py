@@ -4,8 +4,7 @@ import json
 
 import torch
 
-
-from models import OPTForCausalLM, BloomForCausalLM
+from models import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
@@ -13,34 +12,34 @@ from coreset import AlignFeature, RandomSelector, LossPartition, LossSampling, A
 from utils.functional import select_past_key_value
 
 
+@torch.no_grad()
 def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
     correct = 0
     total = 0
     for input_str, output_str, answer in dataset:
-        input_encoding = tokenizer(
-            [input_str + candidate_str for candidate_str in output_str],
-            padding=True,
-            return_tensors='pt',
-        ).to(device)
-        answer_encoding = tokenizer(
-            output_str,
-            padding=True,
-            return_tensors='pt',
-        ).to(device)
+        input_ids = tokenizer(input_str).input_ids
         answer = torch.LongTensor([answer]).to(device)
-        answer_shape = answer_encoding.input_ids.shape
-        with torch.no_grad():
-            logits = model(
-                input_ids=input_encoding.input_ids,
-                past_key_values=past_key_values,
-                multiply_tgt=chunk_num
-                ).logits
+        all_logits = torch.empty(0).to(device)
+        for candidate_str in output_str:
+            candidate_ids = tokenizer(candidate_str).input_ids
+            input_encoding = torch.LongTensor(input_ids + candidate_ids).unsqueeze(0).to(device)
+            answer_encoding = tokenizer(
+                candidate_str,
+                return_tensors='pt',
+            ).to(device)
+            with torch.cuda.amp.autocast():
+                logits = model(
+                    input_ids=input_encoding,
+                    past_key_values=past_key_values,
+                    prefix_parallel=chunk_num
+                    ).logits
 
-        logits = logits[:, -(answer_shape[1] + 1): -1].log_softmax(dim=-1)
-        # select answer
-        logits = logits.view(answer_shape[0] * answer_shape[1], -1)[torch.arange(answer_shape[0] * answer_shape[1]).to(device), answer_encoding.input_ids.flatten()].view(answer_shape)
-        logits = logits.mul(answer_encoding.attention_mask).sum(dim=1).unsqueeze(0)
-        preds = logits.argmax(dim=-1)
+            logits = logits[0, len(candidate_ids): -1].log_softmax(dim=-1)
+            # select answer
+            logits = logits[torch.arange(logits.shape[0]).to(device), answer_encoding.input_ids]
+            all_logits = torch.cat((all_logits, torch.sum(logits, dim=1)), dim=0)
+
+        preds = all_logits.argmax(dim=-1)
         correct += preds.eq(answer).sum().item()
         total += len(answer)
 
@@ -71,7 +70,7 @@ def main():
     if args.model.startswith('bloom'):
         model = BloomForCausalLM.from_pretrained(model_path)
     else:
-        raise NotImplementedError()
+        model = AutoModelForCausalLM.from_pretrained(model_path)
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_path, 
@@ -111,7 +110,7 @@ def main():
             raise NotImplementedError()
 
         acc_list = []
-        demo_max_length = args.max_length - max(len(input_str) + max(len(ans) for ans in output_str) for input_str, output_str, _ in dataset_val.examples)
+        demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
         model.eval()
         for _ in range(args.repeat_num):
             indices = selector.get_demo_indices(args.coreset_size)
@@ -145,14 +144,9 @@ def main():
                         use_cache=True
                         ).past_key_values
 
-                past_key_values_cpu = ()
-                for layer_past in past_key_values:
-                    layer_past = tuple(past_state.cpu() for past_state in layer_past)
-                    past_key_values_cpu = past_key_values_cpu + (layer_past, )
+                all_past_key_values.append(past_key_values)
 
-                all_past_key_values.append(past_key_values_cpu)
-
-            all_past_key_values = select_past_key_value(all_past_key_values, dataset_train.class_num, torch.ones(demo_encoding_batch.shape))
+            all_past_key_values = select_past_key_value(all_past_key_values, 1, torch.ones(demo_encoding_batch.shape))
             acc = validate(model, dataset_val, tokenizer, device, all_past_key_values, len(demo_encoding))
             acc_list.append(acc)
             print(acc)
