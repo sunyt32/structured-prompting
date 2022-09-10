@@ -30,7 +30,7 @@ def main():
     parser.add_argument('--repeat_num', type=int, default=10)
     parser.add_argument('--max_train_num', type=int, default=512)
     parser.add_argument('--max_val_num', type=int, default=128)
-    parser.add_argument('--max_length', type=int, default=2048)
+    parser.add_argument('--max_length', type=int, default=2000)
     parser.add_argument('--coreset_size', type=int, default=48)
     args = parser.parse_args()
 
@@ -93,13 +93,11 @@ def main():
             dataset_val.demo = dataset_train.get_demo_from_indices(indices)
             print(indices, dataset_val.demo)
             acc = validate(model, dataset_val, tokenizer, device)
-            acc_list.append({
-                "acc": acc
-            })
+            acc_list.append(acc)
             print(acc)
  
         log_dict = {
-            "acc": torch.Tensor([item["acc"] for item in acc_list]).mean().item(),
+            "acc": torch.Tensor(acc_list).mean().item(),
             "details": acc_list
         }
         print(args)

@@ -96,6 +96,9 @@ class AlignFeature(CoreSet):
 
             return best_indices
         else:
-            indices = random.sample(self.indices, demo_num)
-            return indices
+            if demo_num < len(self.indices):
+                return random.sample(self.indices, demo_num)
+            else:
+                random.shuffle(self.indices)
+                return self.indices
 

@@ -13,7 +13,11 @@ class RandomSelector(CoreSet):
         self.device = device
 
     def _get_demo_indices(self, demo_num):
-        return random.sample(self.indices, demo_num)
+        if demo_num < len(self.indices):
+            return random.sample(self.indices, demo_num)
+        else:
+            random.shuffle(self.indices)
+            return self.indices
         # random.shuffle(self.indices)
         # demo_each_label = demo_num / self.dataset_train.class_num
         # label_count = [0 for _ in range(self.dataset_train.class_num)]

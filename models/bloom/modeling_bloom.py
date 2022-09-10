@@ -30,6 +30,7 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
+from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
 from transformers.utils import logging
 from .configuration_bloom import BloomConfig
 
@@ -291,13 +292,11 @@ class BloomAttention(nn.Module):
             present = None
 
         beta = 1.0 / self.layer_number
-
         # # [batch_size*num_heads, head_dim, q_length] x [batch_size*num_heads, head_dim, k_length] -> [batch_size*num_heads, q_length, k_length]
         matmul_result = (1.0 / self.norm_factor) * torch.bmm(
             query_layer.transpose(1, 2).reshape(-1, query_layer.shape[1], query_layer.shape[3]),
             key_layer.permute(0, 2, 3, 1).reshape(-1, key_layer.shape[3], key_layer.shape[1]),
         ) + beta * alibi
-
         # change view to [batch_size, num_heads, q_length, k_length]
         attention_scores = matmul_result.view(-1, self.num_heads, matmul_result.size(1), matmul_result.size(2))
 
@@ -589,10 +588,45 @@ class BloomModel(BloomPreTrainedModel):
         # Final Layer Norm
         self.ln_f = LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
+        # Model parallel
+        self.model_parallel = False
+        self.device_map = None
         self.gradient_checkpointing = False
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    def parallelize(self, device_map=None):
+        # Check validity of device_map
+        self.device_map = (
+            get_device_map(len(self.h), range(torch.cuda.device_count())) if device_map is None else device_map
+        )
+        assert_device_map(self.device_map, len(self.h))
+        self.model_parallel = True
+        self.first_device = "cpu" if "cpu" in self.device_map.keys() else "cuda:" + str(min(self.device_map.keys()))
+        self.last_device = "cuda:" + str(max(self.device_map.keys()))
+        self.word_embeddings = self.word_embeddings.to(self.first_device)
+        self.word_embeddings_layernorm = self.word_embeddings_layernorm.to(self.first_device)
+        # Load onto devices
+        for k, v in self.device_map.items():
+            for block in v:
+                cuda_device = "cuda:" + str(k)
+                self.h[block] = self.h[block].to(cuda_device)
+        # ln_f to last
+        self.ln_f = self.ln_f.to(self.last_device)
+
+    def deparallelize(self):
+        self.model_parallel = False
+        self.device_map = None
+        self.first_device = "cpu"
+        self.last_device = "cpu"
+        self.word_embeddings = self.word_embeddings.to("cpu")
+        self.word_embeddings_layernorm = self.word_embeddings_layernorm.to("cpu")
+        for index in range(len(self.h)):
+            self.h[index] = self.h[index].to("cpu")
+        self.ln_f = self.ln_f.to("cpu")
+        torch.cuda.empty_cache()
+
 
     def get_input_embeddings(self):
         return self.word_embeddings
@@ -693,6 +727,18 @@ class BloomModel(BloomPreTrainedModel):
         causal_mask = self._prepare_attn_mask(attention_mask, input_shape, inputs_embeds, past_key_values_length)
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
+            
+            if self.model_parallel:
+                torch.cuda.set_device(hidden_states.device)
+
+            # Ensure layer_past is on same device as hidden_states (might not be correct)
+            if layer_past is not None:
+                layer_past = tuple(past_state.to(hidden_states.device) for past_state in layer_past)
+            # Ensure that attention_mask is always on the same device as hidden_states
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(hidden_states.device)
+            if isinstance(head_mask, torch.Tensor):
+                head_mask = head_mask.to(hidden_states.device)
 
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -738,6 +784,11 @@ class BloomModel(BloomPreTrainedModel):
             if output_attentions:
                 all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
 
+            if self.model_parallel:
+                for k, v in self.device_map.items():
+                    if i == v[-1] and "cuda:" + str(k) != self.last_device:
+                        hidden_states = hidden_states.to("cuda:" + str(k + 1))
+        
         # Add last hidden state
         hidden_states = self.ln_f(hidden_states)
 
@@ -772,8 +823,30 @@ class BloomForCausalLM(BloomPreTrainedModel):
         self.transformer = BloomModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
+        # Model parallel
+        self.model_parallel = False
+        self.device_map = None
+
         # Initialize weights and apply final processing
         self.post_init()
+
+    def parallelize(self, device_map=None):
+        self.device_map = (
+            get_device_map(len(self.transformer.h), range(torch.cuda.device_count()))
+            if device_map is None
+            else device_map
+        )
+        assert_device_map(self.device_map, len(self.transformer.h))
+        self.transformer.parallelize(self.device_map)
+        self.lm_head = self.lm_head.to(self.transformer.first_device)
+        self.model_parallel = True
+
+    def deparallelize(self):
+        self.transformer.deparallelize()
+        self.transformer = self.transformer.to("cpu")
+        self.lm_head = self.lm_head.to("cpu")
+        self.model_parallel = False
+        torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -848,6 +921,10 @@ class BloomForCausalLM(BloomPreTrainedModel):
             return_dict=return_dict,
         )
         hidden_states = transformer_outputs[0]
+
+        if self.model_parallel:
+            torch.cuda.set_device(self.transformer.first_device)
+            hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
 
