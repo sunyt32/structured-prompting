@@ -34,7 +34,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
                     prefix_parallel=chunk_num
                     ).logits
 
-            logits = logits[0, len(candidate_ids): -1].log_softmax(dim=-1)
+            logits = logits[0, len(input_ids): -1].log_softmax(dim=-1)
             # select answer
             logits = logits[torch.arange(logits.shape[0]).to(device), answer_encoding.input_ids]
             all_logits = torch.cat((all_logits, torch.sum(logits, dim=1)), dim=0)
