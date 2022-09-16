@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 
 
 class BaseTask(Dataset):
-    def __init__(self, max_data_num=500, temp_index=0, demo=""):
+    def __init__(self, max_data_num=None, temp_index=0, demo=""):
         super().__init__()
         self.temp_index = temp_index
         self.examples = []
@@ -20,16 +20,16 @@ class BaseTask(Dataset):
 
     def preprocess_dataset(self):
         self.label_count = [0 for _ in range(self.class_num)]
-        for index, example in enumerate(self.dataset):
-            if index >= self.max_data_num:
-                break
-            
+        for example in self.dataset:
             example = self.preprocess_example(example)
             if example[0] is None:
                 continue
 
             self.label_count[example[2]] += 1
             self.examples.append(example)
+
+        if self.max_data_num is not None and self.max_data_num < len(self.examples):
+            self.examples = random.sample(self.examples, self.max_data_num)
 
     def get_demo_from_indices(self, indices):
         demo_str = ""
@@ -47,6 +47,30 @@ class BaseTask(Dataset):
                 [input_str +" " + candidate_str for candidate_str in output_str],
                 padding=True
             ).input_ids[0]) for input_str, output_str, _ in self.examples)
+
+    def get_chunk(self, tokenizer, max_length, indices=None, chunk_num=None):
+        if indices is None:
+            indices = list(range(len(self.examples)))
+            random.shuffle(indices)
+
+        demo_encoding_batch = []
+        demo_encoding = []
+        for index in indices:
+            if chunk_num is not None and len(demo_encoding_batch) >= chunk_num:
+                break
+
+            demo = self.get_demo_from_indices(index)
+            demo_input_ids = tokenizer(demo).input_ids
+            if len(demo_encoding) + len(demo_input_ids) <= max_length:
+                demo_encoding += demo_input_ids
+            else:
+                demo_encoding_batch.append((demo_encoding + demo_input_ids)[-max_length:])
+                demo_encoding = []
+
+        if len(demo_encoding_batch) == 0: # doesn't need chunk!
+            demo_encoding_batch.append(demo_encoding)
+
+        return demo_encoding_batch
             
     def __len__(self):
         return len(self.examples)

@@ -5,5 +5,4 @@ from .AlignEmbedding import AlignEmbedding
 from .LossPartition import LossPartition
 from .LossSampling import LossSampling
 from .RandomSelector import RandomSelector
-from .BalanceAlignFeature import BalanceAlignFeature
 

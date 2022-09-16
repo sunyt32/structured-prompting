@@ -61,18 +61,10 @@ class LossPartition(CoreSet):
         self.dataset_train = dataset_train
     
     def get_demo_indices(self, demo_num):
-        demo_each_label = demo_num // self.dataset_train.class_num
-        label_class = torch.arange(self.dataset_train.class_num).repeat(demo_each_label)
-        while True:
-            random.shuffle(label_class)
-            final_indices = []
-            for sub_indices, expect_label in zip(self.indices.chunk(demo_num), label_class):
-                for index in sub_indices:
-                    _, _, label = self.dataset_train.examples[index]
-                    if label == expect_label.item():
-                        final_indices.append(index.item())
-                        break
+        final_indices = []
+        for sub_indices in self.indices.chunk(10):
+            final_indices += random.sample(sub_indices, demo_num // 10)
 
-            if len(final_indices) == demo_num:
-                return final_indices
+        final_indices = [index.item() for index in final_indices]
+        return final_indices
 

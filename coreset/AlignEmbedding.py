@@ -1,12 +1,8 @@
 from . import CoreSet
 from utils import validate
-from utils.functional import expand_past_key_value
 from utils.kmeans import KMeans
 
-import random
-
 import torch
-from torch.utils.data import DataLoader
 
 
 class AlignEmbedding(CoreSet):

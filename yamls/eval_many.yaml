@@ -8,9 +8,9 @@ target:
 environment:
   image: amlt-sing/pytorch-1.11.0
   setup:
-    - pip install transformers --user
-    - pip install datasets --user
-    - pip install matplotlib --user
+    - pip install datasets accelerate matplotlib bitsandbytes --user
+    - pip uninstall enum34
+    - pip install git+https://github.com/huggingface/transformers.git --user
 
 code:
   local_dir: $CONFIG_DIR/../
@@ -23,10 +23,10 @@ storage:
 search:
   job_template:
     name: many-{task}-k{k}-{method}-{model}
-    sku: G1
+    sku: G4
     priority: High
     command:
-    - python3 eval_many.py --coreset_size {k} --task {task} --model {model} --chunk
+    - python3 eval_many.py --coreset_size {k} --task {task} --model {model} --chunk --parallel
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{method}.json
      --select_method {method}
@@ -36,10 +36,11 @@ search:
   params:
     - name: k
       spec: discrete
-      values: [500, 1000, 2000]
+      values: [512]
     - name: task
       spec: discrete
-      values: ["sst2", "sst5", "trec", "subj"] # , "boolq", "hellaswag", "piqa", "copa", "winogrande", "dbpedia", "agnews", "rte", "cb", "mr", "arcc", "arce", "obqa"
+      values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
+      # values: ["dbpedia", "boolq", "rte", "cb", "agnews", "sst2", "sst5", "trec", "subj", "hellaswag", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
       values: ["random"]
@@ -48,4 +49,4 @@ search:
       values: ["bloom-1b7"]
 
   
-
+  
