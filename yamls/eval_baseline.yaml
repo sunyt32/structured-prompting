@@ -26,7 +26,7 @@ search:
     sku: G1
     priority: High
     command:
-    - python3 eval_many.py --coreset_size {k} --task {task} --model {model}
+    - python3 eval_core.py --coreset_size {k} --task {task} --model {model}
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_baseline_{method}.json
      --select_method {method}

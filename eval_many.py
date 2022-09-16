@@ -3,11 +3,16 @@ import os
 import json
 
 import torch
+import torch.distributed as dist
+
+import deepspeed
 
 from models import BloomForCausalLM
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from dataset import get_dataset, dataset_dict
+
+from utils.misc import init_distributed_mode
 from utils.functional import select_past_key_value
 
 
@@ -49,6 +54,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
                 logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
+        print(preds)
         preds = all_logits.argmax(dim=-1)
         correct += int(preds.item() == answer)
         total += 1
@@ -64,6 +70,8 @@ def main():
     parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--parallelize', action='store_true')
     parser.add_argument('--int8', action='store_true')
+    # Distributed setting
+    parser.add_argument("--local_rank", required=False, type=int, help="used by dist launchers")
     # Data setting
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
@@ -77,34 +85,51 @@ def main():
     parser.add_argument('--chunk_num', type=int, default=1)
     args = parser.parse_args()
 
+    init_distributed_mode(args)
     model_path = os.path.join(args.data_path, "model", args.model)
-    if args.int8:
-        max_memory_mapping = {i: "24000MB" for i in range(8)}
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-    else:    
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path)
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_path, 
         use_fast=False)
+    config = AutoConfig.from_pretrained(model_path)
+
+    deepspeed.init_distributed('nccl')
+    with deepspeed.OnDevice(dtype=torch.float16, device='meta'):
+        if args.model.startswith('bloom'):
+            model = BloomForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16)
+
+    model.eval()
+
+    #     max_memory_mapping = {i: "24000MB" for i in range(8)}
+    #     if args.model.startswith('bloom'):
+    #         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
+    #     else:
+    #         model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
+    # else:    
+    #     if args.model.startswith('bloom'):
+    #         model = BloomForCausalLM.from_pretrained(model_path)
+    #     else:
+    #         model = AutoModelForCausalLM.from_pretrained(model_path)
 
     model.config.pad_token_id = model.config.eos_token_id
     tokenizer.pad_token = tokenizer.eos_token
     
-    if args.parallelize:
-        model.parallelize()
-        device = torch.device(model.lm_head.weight.device)
-    elif args.int8:
-        device = torch.device(model.transformer.word_embeddings.weight.device)
-    else:
-        device = torch.device(args.device)
-        model = model.to(device)
+    model = deepspeed.init_inference(model,
+        mp_size=args.world_size,
+        dtype=torch.float16
+    )
+    deepspeed.runtime.utils.see_memory_usage('pre-ds-inference-init', force=True)
+    device = torch.device(model.module.transformer.word_embeddings.weight.device)
+    # if args.parallelize:
+    #     model.parallelize()
+    #     device = torch.device(model.lm_head.weight.device)
+    # elif args.int8:
+    #     device = torch.device(model.transformer.word_embeddings.weight.device)
+    # else:
+    #     device = torch.device(args.device)
+    #     model = model.to(device)
 
     print("Model initialized.")
     
@@ -118,7 +143,6 @@ def main():
         dataset_val = get_dataset(dataset, is_train=False)
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
-        model.eval()
         for _ in range(args.repeat_num):
             demo_encoding_batch = dataset_train.get_chunk(tokenizer, demo_max_length, chunk_num=args.chunk_num)
             demo_encoding_batch = torch.LongTensor(demo_encoding_batch)
@@ -151,11 +175,12 @@ def main():
             "acc": torch.Tensor(acc_list).mean().item(),
             "details": acc_list
         }
-        print(args)
-        print(log_dict)
-        if args.log_path:
-            with open(args.log_path, 'w') as fp:
-                fp.write(json.dumps(log_dict, indent=1))
+
+        if dist.get_rank() == 0:
+            print(log_dict)
+            if args.log_path:
+                with open(args.log_path, 'w') as fp:
+                    fp.write(json.dumps(log_dict, indent=1))
 
 
 if __name__ == "__main__":
