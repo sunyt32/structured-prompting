@@ -11,7 +11,7 @@ environment:
     - pip install datasets accelerate matplotlib bitsandbytes --user
     - pip uninstall enum34
     - pip install git+https://github.com/huggingface/transformers.git --user
-    - pip install git+https://github.com/microsoft/DeepSpeed.git --user
+    # - pip install git+https://github.com/microsoft/DeepSpeed.git --user
 
 code:
   local_dir: $CONFIG_DIR/../

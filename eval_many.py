@@ -3,6 +3,9 @@ import os
 import json
 
 import torch
+import torch.distributed as dist
+
+import deepspeed
 
 from models import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
