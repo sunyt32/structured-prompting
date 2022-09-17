@@ -26,7 +26,7 @@ search:
     sku: G4
     priority: High
     command:
-    - python3 eval_many.py --coreset_size {k} --task {task} --model {model} --chunk --parallel
+    - python3 eval_core.py --coreset_size {k} --task {task} --model {model} --chunk --parallel
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{method}.json
      --select_method {method}
@@ -43,7 +43,7 @@ search:
       # values: ["dbpedia", "boolq", "rte", "cb", "agnews", "sst2", "sst5", "trec", "subj", "hellaswag", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
-      values: ["random"]
+      values: ["align_feature"]
     - name: model
       spec: discrete
       values: ["bloom-1b7"]

@@ -17,6 +17,9 @@ from .OBQA import OBQA
 from .PIQA import PIQA
 from .StoryCloze import StoryCloze
 from .Winogrande import Winogrande
+from .WiC import WiC
+from .WSC import WSC
+from .MultiRC import MultiRC
 
 
 dataset_dict = {
@@ -37,7 +40,10 @@ dataset_dict = {
     'piqa': PIQA,
     'storycloze': StoryCloze,
     'winogrande': Winogrande,
-    'boolq': BoolQ
+    'boolq': BoolQ,
+    'wic': WiC,
+    'wsc': WSC,
+    "multirc": MultiRC
 }
 
 def get_dataset(dataset, *args, **kwargs) -> BaseTask:

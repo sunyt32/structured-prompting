@@ -3,17 +3,21 @@ import os
 import json
 
 import torch
+import torch.distributed as dist
 
-from models import BloomForCausalLM
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import deepspeed
+
+from models.bloom import BloomForCausalLM, BloomBlock
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from dataset import get_dataset, dataset_dict
 
+from utils.misc import init_distributed_mode
 from utils.functional import select_past_key_value
 
 
 @torch.no_grad()
-def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8):
+def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
     correct = 0
     total = 0
     for input_str, output_str, answer in dataset:
@@ -27,12 +31,11 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
             return_tensors='pt',
         ).to(device)
         if answer_encoding.input_ids.shape[1] == 1: # classification
-            with torch.autocast(device_type="cuda", enabled=not int8):
-                logits = model(
-                    input_ids=input_encoding,
-                    past_key_values=past_key_values,
-                    prefix_parallel=chunk_num
-                    ).logits
+            logits = model(
+                input_ids=input_encoding,
+                past_key_values=past_key_values,
+                prefix_parallel=chunk_num
+                ).logits
                 
             logits = logits[0][-1]
             all_logits = logits[answer_encoding.input_ids.flatten()]
@@ -40,21 +43,17 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
                 candidate_encoding = candidate_encoding[:candidate_mask.sum()].unsqueeze(0)
-                with torch.autocast(device_type="cuda", enabled=not int8):
-                    logits = model(
-                        input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
-                        past_key_values=past_key_values,
-                        prefix_parallel=chunk_num
-                        ).logits
+                logits = model(
+                    input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
+                    past_key_values=past_key_values,
+                    prefix_parallel=chunk_num
+                    ).logits
 
-                logits = logits[0, (input_encoding.shape[1] - 1): -1]
-                means, _ = torch.max(logits, -1, keepdim=True)
-                logits = torch.log_softmax(logits - means, dim=-1)
+                logits = logits[0, (input_encoding.shape[1] - 1): -1].log_softmax(dim=-1)
                 # select answer
                 logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
-        print(all_logits)
         preds = all_logits.argmax(dim=-1)
         correct += int(preds.item() == answer)
         total += 1
@@ -66,9 +65,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
 def main():
     parser = argparse.ArgumentParser()
     # Model setting
-    parser.add_argument('--model', type=str, default="bloom-560m")
-    parser.add_argument('--device', type=str, default="cuda:0")
-    parser.add_argument('--int8', action='store_true')
+    parser.add_argument('--model', type=str, default="bloom-deepspeed-inference-fp16")
     # Distributed setting
     parser.add_argument("--local_rank", required=False, type=int, help="used by dist launchers")
     # Data setting
@@ -84,26 +81,34 @@ def main():
     parser.add_argument('--chunk_num', type=int, default=1)
     args = parser.parse_args()
 
+    init_distributed_mode(args)
     model_path = os.path.join(args.data_path, "model", args.model)
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_path, 
         use_fast=False)
+    config = AutoConfig.from_pretrained(model_path)
 
-    if args.int8:
-        max_memory_mapping = {i: "24000MB" for i in range(8)}
+    # model = BloomForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
+
+    deepspeed.init_distributed('nccl')
+    with deepspeed.OnDevice(dtype=torch.bfloat16, device='meta'):
         if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
+            model = BloomForCausalLM._from_config(config, torch_dtype=torch.bfloat16)
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-    else:    
-        max_memory_mapping = {i: "48000MB" for i in range(8)}
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', torch_dtype=torch.bfloat16, max_memory=max_memory_mapping)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', torch_dtype=torch.bfloat16, max_memory=max_memory_mapping)
+            model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
 
     model.eval()
+    model = deepspeed.init_inference(model,
+        mp_size=args.world_size,
+        dtype=torch.float16,
+        checkpoint=os.path.join(model_path, 'ds_inference_config.json'),
+        injection_policy={BloomBlock: ('self_attention.dense', 'mlp.dense_4h_to_h')},
+        # replace_with_kernel_inject=True,
+        base_dir=model_path
+    )
+    model = model.module
+    deepspeed.runtime.utils.see_memory_usage('pre-ds-inference-init', force=True)
     device = torch.cuda.current_device()
     print("Model initialized.")
     
@@ -127,22 +132,22 @@ def main():
 
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
-                with torch.autocast(device_type="cuda", enabled=not args.int8):
-                    with torch.no_grad():
-                        past_key_values = model(
-                            input_ids=demo_encoding.unsqueeze(0).to(device), 
-                            use_cache=True
-                        ).past_key_values
+                with torch.no_grad():
+                    past_key_values = model(
+                        input_ids=demo_encoding.unsqueeze(0).to(device), 
+                        use_cache=True
+                    ).past_key_values
 
-                past_key_values_cpu = ()
-                for layer_past in past_key_values:
-                    layer_past = tuple(past_state.cpu() for past_state in layer_past)
-                    past_key_values_cpu = past_key_values_cpu + (layer_past, )
+                # past_key_values_cpu = ()
+                # for layer_past in past_key_values:
+                #     layer_past = tuple(past_state.cpu() for past_state in layer_past)
+                #     past_key_values_cpu = past_key_values_cpu + (layer_past, )
 
-                all_past_key_values.append(past_key_values_cpu)
+                all_past_key_values.append(past_key_values)
+                # all_past_key_values.append(past_key_values_cpu)
 
-            past_key_values = select_past_key_value(all_past_key_values, 1, torch.ones(demo_encoding_batch.shape))
-            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.int8)
+            past_key_values = select_past_key_value(all_past_key_values)
+            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch))
             acc_list.append(acc)
             print(acc)
  
@@ -151,10 +156,11 @@ def main():
             "details": acc_list
         }
 
-        print(log_dict)
-        if args.log_path:
-            with open(args.log_path, 'w') as fp:
-                fp.write(json.dumps(log_dict, indent=1))
+        if dist.get_rank() == 0:
+            print(log_dict)
+            if args.log_path:
+                with open(args.log_path, 'w') as fp:
+                    fp.write(json.dumps(log_dict, indent=1))
 
 
 if __name__ == "__main__":

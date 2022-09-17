@@ -27,11 +27,12 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
             return_tensors='pt',
         ).to(device)
         if answer_encoding.input_ids.shape[1] == 1: # classification
-            logits = model(
-                input_ids=input_encoding,
-                past_key_values=past_key_values,
-                prefix_parallel=chunk_num
-                ).logits
+            with torch.cuda.amp.autocast():
+                logits = model(
+                    input_ids=input_encoding,
+                    past_key_values=past_key_values,
+                    prefix_parallel=chunk_num
+                    ).logits
                 
             logits = logits[0][-1]
             all_logits = logits[answer_encoding.input_ids.flatten()]
@@ -39,11 +40,12 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
                 candidate_encoding = candidate_encoding[:candidate_mask.sum()].unsqueeze(0)
-                logits = model(
-                    input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
-                    past_key_values=past_key_values,
-                    prefix_parallel=chunk_num
-                    ).logits
+                with torch.cuda.amp.autocast():
+                    logits = model(
+                        input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
+                        past_key_values=past_key_values,
+                        prefix_parallel=chunk_num
+                        ).logits
 
                 logits = logits[0, (input_encoding.shape[1] - 1): -1].log_softmax(dim=-1)
                 # select answer
@@ -64,8 +66,8 @@ def main():
     parser.add_argument('--model', type=str, default="bloom-560m")
     parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--parallelize', action='store_true')
-    parser.add_argument('--int8', action='store_true')
     # Data setting
+    parser.add_argument('--chunk', action='store_true')
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
@@ -74,24 +76,17 @@ def main():
     # Parameters
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--max_train_num', type=int, default=4096)
+    parser.add_argument('--max_val_num', type=int, default=4096)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
-    parser.add_argument('--coreset_size', type=int, default=4096)
-    parser.add_argument('--chunk_num', type=int, default=1)
+    parser.add_argument('--coreset_size', type=int, default=1024)
     args = parser.parse_args()
 
-    model_path = os.path.join(args.data_path, "model", args.model)
-    if args.int8:
-        max_memory_mapping = {i: "24000MB" for i in range(8)}
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-    else:    
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path)
+    model_path = os.path.join(args.data_path, "model", args.model)   
+    if args.model.startswith('bloom'):
+        model = BloomForCausalLM.from_pretrained(model_path)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_path)
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_path, 
@@ -103,8 +98,6 @@ def main():
     if args.parallelize:
         model.parallelize()
         device = torch.device(model.lm_head.weight.device)
-    elif args.int8:
-        device = torch.device(model.transformer.word_embeddings.weight.device)
     else:
         device = torch.device(args.device)
         model = model.to(device)
@@ -118,7 +111,7 @@ def main():
 
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
-        dataset_val = get_dataset(dataset, is_train=False)
+        dataset_val = get_dataset(dataset, is_train=False, max_data_num=args.max_val_num)
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
         elif args.select_method == "align_embedding":
@@ -137,40 +130,17 @@ def main():
         model.eval()
         for _ in range(args.repeat_num):
             indices = selector.get_demo_indices(args.coreset_size)
-            demo_input_ids_list = []
-            for index in indices:
-                demo = dataset_train.get_demo_from_indices(index)
-                demo_input_ids = tokenizer(demo).input_ids
-                demo_input_ids_list.append(demo_input_ids)
-
-            demo_encoding_batch = []
-            demo_encoding = []
-            for demo_input_ids in demo_input_ids_list:
-                if args.chunk_num is not None and len(demo_encoding_batch) >= args.chunk_num:
-                    break
-
-                if len(demo_encoding) + len(demo_input_ids) <= demo_max_length:
-                    demo_encoding += demo_input_ids
-                else:
-                    demo_encoding_batch.append((demo_encoding + demo_input_ids)[-demo_max_length:])
-                    demo_encoding = []
-
-            if len(demo_encoding_batch) == 0: # doesn't need chunk!
-                demo_encoding_batch.append(demo_encoding)
-
+            demo_encoding_batch = dataset_train.get_chunk(tokenizer, demo_max_length, indices=indices, chunk_num=None if args.chunk else 1)
             demo_encoding_batch = torch.LongTensor(demo_encoding_batch)
             print(demo_encoding_batch.shape)
-            if args.chunk_num is not None and demo_encoding_batch.shape[0] < args.chunk_num:
-                print("The dataset is not large enough!")
-                exit()
-
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
                 with torch.no_grad():
-                    past_key_values = model(
-                        input_ids=demo_encoding.unsqueeze(0).to(device), 
-                        use_cache=True
-                    ).past_key_values
+                    with torch.cuda.amp.autocast():
+                        past_key_values = model(
+                            input_ids=demo_encoding.unsqueeze(0).to(device), 
+                            use_cache=True
+                        ).past_key_values
 
                 past_key_values_cpu = ()
                 for layer_past in past_key_values:
