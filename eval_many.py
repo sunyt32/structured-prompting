@@ -68,6 +68,7 @@ def main():
     parser.add_argument('--model', type=str, default="bloom-560m")
     parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--int8', action='store_true')
+    parser.add_argument('--parallel', action='store_true')
     # Distributed setting
     parser.add_argument("--local_rank", required=False, type=int, help="used by dist launchers")
     # Data setting
@@ -95,14 +96,16 @@ def main():
             model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
         else:
             model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-    else:    
-        max_memory_mapping = {i: "48000MB" for i in range(8)}
+    else:
         if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', torch_dtype=torch.bfloat16, max_memory=max_memory_mapping)
+            model = BloomForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', torch_dtype=torch.bfloat16, max_memory=max_memory_mapping)
+            model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
 
     model.eval()
+    if args.parallel:
+        model.parallelize()
+
     device = torch.cuda.current_device()
     print("Model initialized.")
     

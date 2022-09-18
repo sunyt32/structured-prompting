@@ -26,7 +26,7 @@ search:
     sku: G4
     priority: High
     command:
-    - python3 eval_core.py --chunk_num {k} --task {task} --model {model} --parallel
+    - python3 eval_core.py --coreset_size {k} --task {task} --model {model} --chunk --parallel
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{method}.json
      --select_method {method}
@@ -36,14 +36,14 @@ search:
   params:
     - name: k
       spec: discrete
-      values: [1, 3, 6]
+      values: [512]
     - name: task
       spec: discrete
-      values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "copa"]
+      values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
       # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
-      values: ["random"]
+      values: ["align_feature"]
     - name: model
       spec: discrete
       values: ["bloom-1b7"]
