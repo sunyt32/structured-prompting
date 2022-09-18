@@ -27,13 +27,12 @@ class BaseTask(Dataset):
 
             self.label_count[example[2]] += 1
             self.examples.append(example)
-
-        next_seed = random.randint(0, 1e6)
-        random.seed(0) # ensure the dataset's examples are same among different seeds
+ 
         if self.max_data_num is not None and self.max_data_num < len(self.examples):
+            next_seed = random.randint(0, 1e6)
+            random.seed(0) # ensure the dataset's examples are same among different seeds
             self.examples = random.sample(self.examples, self.max_data_num)
-
-        random.seed(next_seed)
+            random.seed(next_seed)
 
     def get_demo_from_indices(self, indices):
         demo_str = ""

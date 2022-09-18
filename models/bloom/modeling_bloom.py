@@ -299,12 +299,12 @@ class BloomAttention(nn.Module):
         attn_weights = matmul_result.view(-1, self.num_heads, matmul_result.size(1), matmul_result.size(2))
         # We replace the scaled softmax by just a few line of code - [batch_size, num_heads, q_length, k_length]
         input_dtype = attn_weights.dtype
-        if input_dtype == torch.float16:
+        if input_dtype != torch.float:
             attn_weights = attn_weights.to(torch.float)
 
         if prefix_parallel is not None:
             past_key_values_length = layer_past[0].shape[1]
-            means = torch.mean(attn_weights, -1, keepdim=True)
+            means, _  = torch.max(attn_weights, -1, keepdim=True)
             attn_weights = torch.exp(attn_weights - means)
             attn_weights[:, :, :, :past_key_values_length] = attn_weights[:, :, :, :past_key_values_length] / prefix_parallel
             attn_weights = attn_weights * ~attention_mask

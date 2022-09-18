@@ -5,8 +5,8 @@ def select_past_key_value(past_key_value):
     present = ()
     for layer_past in zip(*past_key_value):
         key, value = tuple(zip(*layer_past))
-        key = torch.cat(key, dim=0)
-        value = torch.cat(value, dim=0)
+        key = torch.cat(key, dim=1)
+        value = torch.cat(value, dim=1)
         present += ((key, value), )
 
     return present

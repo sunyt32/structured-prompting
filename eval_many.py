@@ -48,7 +48,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
                         ).logits
 
                 logits = logits[0, (input_encoding.shape[1] - 1): -1]
-                means, _ = torch.mean(logits, -1, keepdim=True)
+                means, _ = torch.max(logits, -1, keepdim=True)
                 logits = torch.log_softmax(logits - means, dim=-1)
                 # select answer
                 logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
@@ -69,15 +69,12 @@ def main():
     parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--int8', action='store_true')
     parser.add_argument('--parallel', action='store_true')
-    # Distributed setting
-    parser.add_argument("--local_rank", required=False, type=int, help="used by dist launchers")
     # Data setting
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
     # Parameters
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--max_train_num', type=int, default=4096)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
     parser.add_argument('--coreset_size', type=int, default=4096)
@@ -90,23 +87,25 @@ def main():
         model_path, 
         use_fast=False)
 
+    device = torch.cuda.current_device()
     if args.int8:
         max_memory_mapping = {i: "24000MB" for i in range(8)}
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
+        model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
+    elif args.model == 'bloom':
+        max_memory_mapping = {i: "48000MB" for i in range(8)}
+        model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', torch_dtype=torch.bfloat16, max_memory=max_memory_mapping)
     else:
         if args.model.startswith('bloom'):
             model = BloomForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
         else:
             model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
 
-    model.eval()
-    if args.parallel:
-        model.parallelize()
+        if args.parallel:
+            model.parallelize()
+        else:
+            model = model.to(device)
 
-    device = torch.cuda.current_device()
+    model.eval()
     print("Model initialized.")
     
     if args.task:
@@ -115,7 +114,7 @@ def main():
         dataset_list = dataset_dict.keys()
 
     for dataset in dataset_list:
-        dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
+        dataset_train = get_dataset(dataset, is_train=True)
         dataset_val = get_dataset(dataset, is_train=False)
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
