@@ -3,9 +3,6 @@ import os
 import json
 
 import torch
-import torch.distributed as dist
-
-import deepspeed
 
 from models import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -51,13 +48,12 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
                         ).logits
 
                 logits = logits[0, (input_encoding.shape[1] - 1): -1]
-                means, _ = torch.max(logits, -1, keepdim=True)
+                means, _ = torch.mean(logits, -1, keepdim=True)
                 logits = torch.log_softmax(logits - means, dim=-1)
                 # select answer
                 logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
-        print(all_logits)
         preds = all_logits.argmax(dim=-1)
         correct += int(preds.item() == answer)
         total += 1
@@ -144,7 +140,7 @@ def main():
 
                 all_past_key_values.append(past_key_values_cpu)
 
-            past_key_values = select_past_key_value(all_past_key_values, 1, torch.ones(demo_encoding_batch.shape))
+            past_key_values = select_past_key_value(all_past_key_values)
             acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.int8)
             acc_list.append(acc)
             print(acc)
