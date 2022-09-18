@@ -27,7 +27,7 @@ search:
     sku: G4
     priority: High
     command:
-    - python3 -W ignore eval_many.py --chunk_num {k} --task {task}
+    - python3 eval_many.py --chunk_num {k} --task {task}
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_bloom_many.json
   
@@ -36,7 +36,7 @@ search:
   params:
     - name: k
       spec: discrete
-      values: [1, 3, 6]
+      values: [1, 3, 5]
     - name: task
       spec: discrete
       values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "copa"]

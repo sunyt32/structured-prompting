@@ -39,7 +39,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
         else: # multi-choice
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
-                candidate_encoding = candidate_encoding[:candidate_mask.sum()].unsqueeze(0)
+                candidate_encoding = candidate_encoding[torch.where(candidate_mask)].unsqueeze(0)
                 with torch.autocast(device_type="cuda", enabled=not int8):
                     logits = model(
                         input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
@@ -48,10 +48,9 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
                         ).logits
 
                 logits = logits[0, (input_encoding.shape[1] - 1): -1]
-                means, _ = torch.max(logits, -1, keepdim=True)
-                logits = torch.log_softmax(logits - means, dim=-1)
+                logits = torch.log_softmax(logits, dim=-1)
                 # select answer
-                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
+                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].mean()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
         preds = all_logits.argmax(dim=-1)
