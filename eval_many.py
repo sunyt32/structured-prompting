@@ -66,7 +66,7 @@ def main():
     # Model setting
     parser.add_argument('--model', type=str, default="bloom-560m")
     parser.add_argument('--device', type=str, default="cuda:0")
-    parser.add_argument('--int8', action='store_true')
+    parser.add_argument('--dtype', type=str, default="float16")
     parser.add_argument('--parallel', action='store_true')
     # Data setting
     parser.add_argument('--task', type=str)
@@ -87,7 +87,7 @@ def main():
         use_fast=False)
 
     device = torch.cuda.current_device()
-    if args.int8:
+    if args.dtype == "int8":
         max_memory_mapping = {i: "24000MB" for i in range(8)}
         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
     elif args.model == 'bloom':
@@ -127,7 +127,7 @@ def main():
 
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
-                with torch.autocast(device_type="cuda", enabled=not args.int8):
+                with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
                     with torch.no_grad():
                         past_key_values = model(
                             input_ids=demo_encoding.unsqueeze(0).to(device), 
@@ -142,7 +142,7 @@ def main():
                 all_past_key_values.append(past_key_values_cpu)
 
             past_key_values = select_past_key_value(all_past_key_values)
-            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.int8)
+            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.dtype == "int8")
             acc_list.append(acc)
             print(acc)
  
