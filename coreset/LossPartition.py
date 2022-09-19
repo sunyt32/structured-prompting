@@ -62,8 +62,8 @@ class LossPartition(CoreSet):
     
     def get_demo_indices(self, demo_num):
         final_indices = []
-        for sub_indices in self.indices.chunk(10):
-            final_indices += random.sample(sub_indices, demo_num // 10)
+        for sub_indices in self.indices.chunk(16):
+            final_indices += random.sample(sub_indices, demo_num // 16)
 
         final_indices = [index.item() for index in final_indices]
         return final_indices

@@ -27,7 +27,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
             return_tensors='pt',
         ).to(device)
         if answer_encoding.input_ids.shape[1] == 1: # classification
-            with torch.autocast():
+            with torch.autocast(device_type="cuda"):
                 logits = model(
                     input_ids=input_encoding,
                     past_key_values=past_key_values,
@@ -40,7 +40,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
                 candidate_encoding = candidate_encoding[torch.where(candidate_mask)].unsqueeze(0)
-                with torch.autocast():
+                with torch.autocast(device_type="cuda"):
                     logits = model(
                         input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
                         past_key_values=past_key_values,
@@ -111,7 +111,7 @@ def main():
 
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
-        dataset_val = get_dataset(dataset, is_train=False)
+        dataset_val = get_dataset(dataset, is_train=False, max_data_num=args.max_val_num)
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
         elif args.select_method == "align_embedding":
@@ -136,7 +136,7 @@ def main():
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
                 with torch.no_grad():
-                    with torch.autocast():
+                    with torch.autocast(device_type="cuda"):
                         past_key_values = model(
                             input_ids=demo_encoding.unsqueeze(0).to(device), 
                             use_cache=True

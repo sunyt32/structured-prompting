@@ -27,7 +27,7 @@ search:
     sku: G4
     priority: High
     command:
-    - python3 eval_many.py --chunk_num {k} --task {task}
+    - python3 eval_many.py --chunk_num {k} --task {task} --model bloom
      --data_path /mnt/yutao/data
      --log_path /mnt/yutao/core-shot/log/{task}_{k}_bloom_many_{dtype}.json
   

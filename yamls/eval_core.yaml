@@ -36,14 +36,14 @@ search:
   params:
     - name: k
       spec: discrete
-      values: [512]
+      values: [1024]
     - name: task
       spec: discrete
       values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
       # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
-      values: ["align_feature"]
+      values: ["random"]
     - name: model
       spec: discrete
       values: ["bloom-1b7"]

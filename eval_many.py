@@ -64,7 +64,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
 def main():
     parser = argparse.ArgumentParser()
     # Model setting
-    parser.add_argument('--model', type=str, default="bloom-560m")
+    parser.add_argument('--model', type=str, default="bloom")
     parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--dtype', type=str, default="float16")
     parser.add_argument('--parallel', action='store_true')
@@ -73,10 +73,8 @@ def main():
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
-    parser.add_argument('--coreset_size', type=int, default=4096)
     parser.add_argument('--chunk_num', type=int, default=1)
     args = parser.parse_args()
 
@@ -86,7 +84,11 @@ def main():
         model_path, 
         use_fast=False)
 
-    device = torch.cuda.current_device()
+    if torch.cuda.is_available():
+        device = torch.cuda.current_device()
+    else:
+        device = torch.device("cpu")
+        
     if args.dtype == "int8":
         max_memory_mapping = {i: "24000MB" for i in range(8)}
         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)

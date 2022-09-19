@@ -614,7 +614,7 @@ class BloomModel(BloomPreTrainedModel):
     def get_input_embeddings(self):
         return self.word_embeddings
 
-    def _prepare_attn_mask(
+    def _prepare_bloom_attn_mask(
         self, attention_mask: torch.Tensor, input_shape: Tuple[int, int], past_key_values_length: int
     ) -> torch.BoolTensor:
         # create causal mask
@@ -711,7 +711,7 @@ class BloomModel(BloomPreTrainedModel):
 
         alibi = build_alibi_tensor(attention_mask, self.n_head, hidden_states.dtype, hidden_states.device, past_key_values_length, prefix_parallel)
 
-        attention_mask = self._prepare_attn_mask(attention_mask, input_shape, past_key_values_length)
+        attention_mask = self._prepare_bloom_attn_mask(attention_mask, input_shape, past_key_values_length)
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
 
