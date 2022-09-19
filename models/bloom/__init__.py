@@ -5,4 +5,6 @@ from .modeling_bloom import (
     BloomForTokenClassification,
     BloomModel,
     BloomPreTrainedModel,
+    BloomBlock
 )
+

@@ -3,21 +3,17 @@ import os
 import json
 
 import torch
-import torch.distributed as dist
-
-import deepspeed
 
 from models import BloomForCausalLM
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
 
-from utils.misc import init_distributed_mode
 from utils.functional import select_past_key_value
 
 
 @torch.no_grad()
-def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
+def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8):
     correct = 0
     total = 0
     for input_str, output_str, answer in dataset:
@@ -31,30 +27,32 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
             return_tensors='pt',
         ).to(device)
         if answer_encoding.input_ids.shape[1] == 1: # classification
-            logits = model(
-                input_ids=input_encoding,
-                past_key_values=past_key_values,
-                prefix_parallel=chunk_num
-                ).logits
+            with torch.autocast(device_type="cuda", enabled=not int8):
+                logits = model(
+                    input_ids=input_encoding,
+                    past_key_values=past_key_values,
+                    prefix_parallel=chunk_num
+                    ).logits
                 
             logits = logits[0][-1]
             all_logits = logits[answer_encoding.input_ids.flatten()]
         else: # multi-choice
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
-                candidate_encoding = candidate_encoding[:candidate_mask.sum()].unsqueeze(0)
-                logits = model(
-                    input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
-                    past_key_values=past_key_values,
-                    prefix_parallel=chunk_num
-                    ).logits
+                candidate_encoding = candidate_encoding[torch.where(candidate_mask)].unsqueeze(0)
+                with torch.autocast(device_type="cuda", enabled=not int8):
+                    logits = model(
+                        input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
+                        past_key_values=past_key_values,
+                        prefix_parallel=chunk_num
+                        ).logits
 
-                logits = logits[0, (input_encoding.shape[1] - 1): -1].log_softmax(dim=-1)
+                logits = logits[0, (input_encoding.shape[1] - 1): -1]
+                logits = torch.log_softmax(logits, dim=-1)
                 # select answer
-                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
+                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].mean()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
-        print(preds)
         preds = all_logits.argmax(dim=-1)
         correct += int(preds.item() == answer)
         total += 1
@@ -68,69 +66,45 @@ def main():
     # Model setting
     parser.add_argument('--model', type=str, default="bloom-560m")
     parser.add_argument('--device', type=str, default="cuda:0")
-    parser.add_argument('--parallelize', action='store_true')
-    parser.add_argument('--int8', action='store_true')
-    # Distributed setting
-    parser.add_argument("--local_rank", required=False, type=int, help="used by dist launchers")
+    parser.add_argument('--dtype', type=str, default="float16")
+    parser.add_argument('--parallel', action='store_true')
     # Data setting
     parser.add_argument('--task', type=str)
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
     # Parameters
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--max_train_num', type=int, default=4096)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
     parser.add_argument('--coreset_size', type=int, default=4096)
     parser.add_argument('--chunk_num', type=int, default=1)
     args = parser.parse_args()
 
-    init_distributed_mode(args)
     model_path = os.path.join(args.data_path, "model", args.model)
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_path, 
         use_fast=False)
-    config = AutoConfig.from_pretrained(model_path)
 
-    deepspeed.init_distributed('nccl')
-    with deepspeed.OnDevice(dtype=torch.float16, device='meta'):
+    device = torch.cuda.current_device()
+    if args.dtype == "int8":
+        max_memory_mapping = {i: "24000MB" for i in range(8)}
+        model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
+    elif args.model == 'bloom':
+        max_memory_mapping = {i: "48000MB" for i in range(8)}
+        model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', torch_dtype=torch.bfloat16, max_memory=max_memory_mapping)
+    else:
         if args.model.startswith('bloom'):
-            model = BloomForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16)
+            model = BloomForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16)
+            model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
+
+        if args.parallel:
+            model.parallelize()
+        else:
+            model = model.to(device)
 
     model.eval()
-
-    #     max_memory_mapping = {i: "24000MB" for i in range(8)}
-    #     if args.model.startswith('bloom'):
-    #         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-    #     else:
-    #         model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
-    # else:    
-    #     if args.model.startswith('bloom'):
-    #         model = BloomForCausalLM.from_pretrained(model_path)
-    #     else:
-    #         model = AutoModelForCausalLM.from_pretrained(model_path)
-
-    model.config.pad_token_id = model.config.eos_token_id
-    tokenizer.pad_token = tokenizer.eos_token
-    
-    model = deepspeed.init_inference(model,
-        mp_size=args.world_size,
-        dtype=torch.float16
-    )
-    deepspeed.runtime.utils.see_memory_usage('pre-ds-inference-init', force=True)
-    device = torch.device(model.module.transformer.word_embeddings.weight.device)
-    # if args.parallelize:
-    #     model.parallelize()
-    #     device = torch.device(model.lm_head.weight.device)
-    # elif args.int8:
-    #     device = torch.device(model.transformer.word_embeddings.weight.device)
-    # else:
-    #     device = torch.device(args.device)
-    #     model = model.to(device)
-
     print("Model initialized.")
     
     if args.task:
@@ -139,7 +113,7 @@ def main():
         dataset_list = dataset_dict.keys()
 
     for dataset in dataset_list:
-        dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
+        dataset_train = get_dataset(dataset, is_train=True)
         dataset_val = get_dataset(dataset, is_train=False)
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
@@ -153,11 +127,12 @@ def main():
 
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
-                with torch.no_grad():
-                    past_key_values = model(
-                        input_ids=demo_encoding.unsqueeze(0).to(device), 
-                        use_cache=True
-                    ).past_key_values
+                with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
+                    with torch.no_grad():
+                        past_key_values = model(
+                            input_ids=demo_encoding.unsqueeze(0).to(device), 
+                            use_cache=True
+                        ).past_key_values
 
                 past_key_values_cpu = ()
                 for layer_past in past_key_values:
@@ -166,8 +141,8 @@ def main():
 
                 all_past_key_values.append(past_key_values_cpu)
 
-            past_key_values = select_past_key_value(all_past_key_values, 1, torch.ones(demo_encoding_batch.shape))
-            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch))
+            past_key_values = select_past_key_value(all_past_key_values)
+            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.dtype == "int8")
             acc_list.append(acc)
             print(acc)
  
@@ -176,11 +151,10 @@ def main():
             "details": acc_list
         }
 
-        if dist.get_rank() == 0:
-            print(log_dict)
-            if args.log_path:
-                with open(args.log_path, 'w') as fp:
-                    fp.write(json.dumps(log_dict, indent=1))
+        print(log_dict)
+        if args.log_path:
+            with open(args.log_path, 'w') as fp:
+                fp.write(json.dumps(log_dict, indent=1))
 
 
 if __name__ == "__main__":

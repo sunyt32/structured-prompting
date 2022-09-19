@@ -1,22 +1,13 @@
 import torch
 
 
-def select_past_key_value(past_key_value, class_num, attention_mask):
-    """
-        key.shape = [batch_size, qk_length, num_heads, head_dim]
-    """
+def select_past_key_value(past_key_value):
     present = ()
-    select_index = torch.where(attention_mask)
     for layer_past in zip(*past_key_value):
         key, value = tuple(zip(*layer_past))
-        key = torch.cat(key, dim=0)
-        value = torch.cat(value, dim=0)
-        if key.shape[1] != attention_mask.shape[1]:
-            key = key[select_index[0], :, select_index[1]].permute(1, 0, 2).expand(class_num, -1, -1, -1)
-            value = value[select_index[0], :, select_index[1]].permute(1, 0, 2).expand(class_num, -1, -1, -1)
-            present += ((key, value), )
-        else:    
-            present += ((key[select_index].expand(class_num, -1, -1, -1), value[select_index].expand(class_num, -1, -1, -1)), )
+        key = torch.cat(key, dim=1)
+        value = torch.cat(value, dim=1)
+        present += ((key, value), )
 
     return present
 

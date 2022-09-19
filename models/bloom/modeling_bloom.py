@@ -52,35 +52,34 @@ BLOOM_PRETRAINED_MODEL_ARCHIVE_LIST = [
 ]
 
 
-def _make_causal_mask(input_ids_shape: torch.Size, dtype: torch.dtype, past_key_values_length: int = 0):
+def _make_causal_mask(
+    input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int
+) -> torch.BoolTensor:
     """
-    Make causal mask used for bi-directional self-attention.
+    Make causal mask used for self-attention.
     """
     batch_size, target_length = input_ids_shape
-    mask = torch.full((target_length, target_length), torch.finfo(dtype).min)
-    mask_cond = torch.arange(mask.size(-1))
-    intermediate_mask = mask_cond < (mask_cond + 1).view(mask.size(-1), 1)
-    mask.masked_fill_(intermediate_mask, 0)
-    mask = mask.to(dtype)
+    mask = torch.empty((target_length, target_length + past_key_values_length), dtype=torch.bool, device=device)
+    # ONNX doesn't support `torch.Tensor.triu` properly, thus we use this workaround
+    seq_ids = torch.arange(target_length, device=device)
+    mask[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
 
     if past_key_values_length > 0:
-        mask = torch.cat([torch.zeros(target_length, past_key_values_length, dtype=dtype), mask], dim=-1)
+        mask[:, :past_key_values_length] = False
+
     expanded_mask = mask[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length)
     return expanded_mask
 
 
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int = None):
+def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
     """
-    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    Expands attention_mask from `[batch_size, src_length]` to `[batch_size, 1, tgt_length, src_length]`.
     """
-    batch_size, source_length = mask.size()
-    tgt_len = tgt_len if tgt_len is not None else source_length
+    batch_size, src_length = mask.shape
+    tgt_length = tgt_length if tgt_length is not None else src_length
 
-    expanded_mask = mask[:, None, None, :].expand(batch_size, 1, tgt_len, source_length).to(dtype)
-
-    inverted_mask = 1.0 - expanded_mask
-
-    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+    expanded_mask = ~(mask[:, None, None, :].to(torch.bool))
+    return expanded_mask.expand(batch_size, 1, tgt_length, src_length)
 
 
 def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device, past_key_values_length: int, prefix_parallel: int = None) -> torch.Tensor:
@@ -89,7 +88,6 @@ def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device,
     relies on a translation invariance of softmax for quick implementation: with l being a tensor, and a fixed value
     `softmax(l+a) = softmax(l)`. Based on
     https://github.com/ofirpress/attention_with_linear_biases/blob/a35aaca144e0eb6b789dfcb46784c4b8e31b7983/fairseq/models/transformer.py#L742
-
     Args:
     Returns tensor shaped (batch_size * n_head, 1, max_seq_len)
         attention_mask (`torch.Tensor`):
@@ -139,7 +137,6 @@ def build_alibi_tensor(attention_mask: torch.Tensor, n_head: int, dtype, device,
 def dropout_add(x, residual, prob, training):
     """
     Dropout add function
-
     Args:
         x (`torch.tensor`, *required*):
             input tensor
@@ -159,7 +156,6 @@ def bloom_gelu_forward(x):
     """
     Custom bias GELU function. Adapted from Megatron-DeepSpeed code. Here we use a simple implementation (inference) to
     make the model jitable.
-
     Args:
         x (`torch.tensor`, *required*):
             input hidden states
@@ -171,7 +167,6 @@ def bloom_gelu_back(g, x):
     """
     gradient of tanh approximation of gelu gradient of actual gelu is: 0.5 * (1. + torch.erf(x * 0.70710678)) +
     0.3989423 * x * torch.exp(-0.5 * x * x)
-
     Args:
         g (`torch.tensor`, *required*):
             gradient output tensor
@@ -203,9 +198,7 @@ class BloomGelu(nn.Module):
     BloomBiasGelu wrapper function that make use of the simple function on inference mode to make the model
     torchscriptable and use the autograd function in training mode to get the accurate results of the gradients Partly
     copied from Megatron-DeepSpeed code and adapted for our needs
-
     See here why autograd functions are not torchscriptable: https://github.com/pytorch/pytorch/issues/22329
-
     """
 
     def __init__(self):
@@ -238,8 +231,8 @@ class BloomAttention(nn.Module):
             )
 
         # Layer-wise attention scaling
-        self.layer_number = max(1, layer_number)
-        self.norm_factor = math.sqrt(self.head_dim) * self.layer_number
+        self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
+        self.beta = 1.0
 
         self.query_key_value = nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=True)
         self.dense = nn.Linear(self.hidden_size, self.hidden_size)
@@ -297,30 +290,29 @@ class BloomAttention(nn.Module):
         else:
             present = None
 
-        beta = 1.0 / self.layer_number
         # # [batch_size*num_heads, head_dim, q_length] x [batch_size*num_heads, head_dim, k_length] -> [batch_size*num_heads, q_length, k_length]
-        matmul_result = (1.0 / self.norm_factor) * torch.bmm(
+        matmul_result = self.inv_norm_factor * torch.bmm(
             query_layer.transpose(1, 2).reshape(-1, query_layer.shape[1], query_layer.shape[3]),
             key_layer.permute(0, 2, 3, 1).reshape(-1, key_layer.shape[3], key_layer.shape[1]),
-        ) + beta * alibi
+        ) + self.beta * alibi
         # change view to [batch_size, num_heads, q_length, k_length]
         attn_weights = matmul_result.view(-1, self.num_heads, matmul_result.size(1), matmul_result.size(2))
         # We replace the scaled softmax by just a few line of code - [batch_size, num_heads, q_length, k_length]
         input_dtype = attn_weights.dtype
+        if input_dtype != torch.float:
+            attn_weights = attn_weights.to(torch.float)
+
         if prefix_parallel is not None:
-            attn_weights = attn_weights * self.layer_number
             past_key_values_length = layer_past[0].shape[1]
-            means, _ = torch.max(attn_weights.float(), -1, keepdim=True)
-            attn_weights = torch.exp(attn_weights.float() - means)
-            attn_weights[:, :, past_key_values_length:] = attn_weights[:, :, past_key_values_length:] * prefix_parallel
-            attn_weights = attn_weights * (~attention_mask.bool())
+            means, _  = torch.max(attn_weights, -1, keepdim=True)
+            attn_weights = torch.exp(attn_weights - means)
+            attn_weights[:, :, :, :past_key_values_length] = attn_weights[:, :, :, :past_key_values_length] / prefix_parallel
+            attn_weights = attn_weights * ~attention_mask
             attn_weights = attn_weights / torch.sum(attn_weights, -1, keepdim=True)
             attn_weights = attn_weights.to(input_dtype)
         else:
-            attn_weights = (attn_weights * self.layer_number) + attention_mask
-            attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(attn_weights.dtype).min)
             attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(input_dtype)
-            attn_weights = attn_weights * (~attention_mask.bool())
         # [batch_size, num_heads, q_length, k_length]
         attn_weights = self.attention_dropout(attn_weights)
         if head_mask is not None:
@@ -498,14 +490,11 @@ class BloomPreTrainedModel(PreTrainedModel):
 
 
 BLOOM_START_DOCSTRING = r"""
-
     This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving, resizing the input embeddings etc.)
-
     This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
     Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
     and behavior.
-
     Parameters:
         config ([`BloomConfig`]): Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the
@@ -518,13 +507,10 @@ BLOOM_INPUTS_DOCSTRING = r"""
             `input_ids_length` = `sequence_length` if `past_key_values` is `None` else
             `past_key_values[0][0].shape[-2]` (`sequence_length` of input past key value states). Indices of input
             sequence tokens in the vocabulary.
-
             If `past_key_values` is used, only `input_ids` that do not have their past calculated should be passed as
             `input_ids`.
-
             Indices can be obtained using [`BloomTokenizerFast`]. See [`PreTrainedTokenizer.encode`] and
             [`PreTrainedTokenizer.__call__`] for details.
-
             [What are input IDs?](../glossary#input-ids)
         past_key_values (`Tuple[Tuple[torch.Tensor]]` of length `config.n_layers`):
             Contains precomputed hidden-states (key and values in the attention blocks) as computed by the model (see
@@ -532,27 +518,21 @@ BLOOM_INPUTS_DOCSTRING = r"""
             their past given to this model should not be passed as `input_ids` as they have already been computed.
         attention_mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-
             - 1 for tokens that are **not masked**,
             - 0 for tokens that are **masked**.
-
             [What are attention masks?](../glossary#attention-mask)
         position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
             config.max_position_embeddings - 1]`.
-
             [What are position IDs?](../glossary#position-ids)
         head_mask (`torch.FloatTensor` of shape `(num_heads,)` or `(num_layers, num_heads)`, *optional*):
             Mask to nullify selected heads of the self-attention modules. Mask values selected in `[0, 1]`:
-
             - 1 indicates the head is **not masked**,
             - 0 indicates the head is **masked**.
-
         inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
             Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
             is useful if you want more control over how to convert `input_ids` indices into associated vectors than the
             model's internal embedding lookup matrix.
-
             If `past_key_values` is used, optionally only the last `inputs_embeds` have to be input (see
             `past_key_values`).
         use_cache (`bool`, *optional*):
@@ -634,21 +614,25 @@ class BloomModel(BloomPreTrainedModel):
     def get_input_embeddings(self):
         return self.word_embeddings
 
-    def _prepare_attn_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
+    def _prepare_attn_mask(
+        self, attention_mask: torch.Tensor, input_shape: Tuple[int, int], past_key_values_length: int
+    ) -> torch.BoolTensor:
         # create causal mask
-        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        # [batch_size, seq_length] -> [batch_size, 1, tgt_length, src_length]
         combined_attention_mask = None
-        if input_shape[-1] > 1:
-            combined_attention_mask = _make_causal_mask(
-                input_shape, inputs_embeds.dtype, past_key_values_length=past_key_values_length
-            ).to(attention_mask.device)
+        device = attention_mask.device
+        _, src_length = input_shape
 
-        if attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
-            combined_attention_mask = (
-                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
+        if src_length > 1:
+            combined_attention_mask = _make_causal_mask(
+                input_shape, device=device, past_key_values_length=past_key_values_length
             )
+
+        # [batch_size, seq_length] -> [batch_size, 1, tgt_length, src_length]
+        expanded_attn_mask = _expand_mask(attention_mask, tgt_length=src_length)
+        combined_attention_mask = (
+            expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask | combined_attention_mask
+        )
 
         return combined_attention_mask
 
@@ -727,7 +711,7 @@ class BloomModel(BloomPreTrainedModel):
 
         alibi = build_alibi_tensor(attention_mask, self.n_head, hidden_states.dtype, hidden_states.device, past_key_values_length, prefix_parallel)
 
-        attention_mask = self._prepare_attn_mask(attention_mask, input_shape, inputs_embeds, past_key_values_length)
+        attention_mask = self._prepare_attn_mask(attention_mask, input_shape, past_key_values_length)
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
 
@@ -966,10 +950,8 @@ class BloomForCausalLM(BloomPreTrainedModel):
 @add_start_docstrings(
     """
     The Bloom Model transformer with a sequence classification head on top (linear layer).
-
     [`BloomForSequenceClassification`] uses the last token in order to do the classification, as other causal models
     (e.g. GPT-1) do.
-
     Since it does classification on the last token, it requires to know the position of the last token. If a
     `pad_token_id` is defined in the configuration, it finds the last token that is not a padding token in each row. If
     no `pad_token_id` is defined, it simply takes the last value in each row of the batch. Since it cannot guess the

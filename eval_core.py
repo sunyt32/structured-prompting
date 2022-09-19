@@ -27,7 +27,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
             return_tensors='pt',
         ).to(device)
         if answer_encoding.input_ids.shape[1] == 1: # classification
-            with torch.cuda.amp.autocast():
+            with torch.autocast():
                 logits = model(
                     input_ids=input_encoding,
                     past_key_values=past_key_values,
@@ -39,17 +39,17 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
         else: # multi-choice
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
-                candidate_encoding = candidate_encoding[:candidate_mask.sum()].unsqueeze(0)
-                with torch.cuda.amp.autocast():
+                candidate_encoding = candidate_encoding[torch.where(candidate_mask)].unsqueeze(0)
+                with torch.autocast():
                     logits = model(
                         input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
                         past_key_values=past_key_values,
                         prefix_parallel=chunk_num
                         ).logits
 
-                logits = logits[0, (input_encoding.shape[1] - 1): -1].log_softmax(dim=-1)
+                logits = torch.log_softmax(logits[0, (input_encoding.shape[1] - 1): -1], dim=-1)
                 # select answer
-                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
+                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].mean()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
         preds = all_logits.argmax(dim=-1)
@@ -111,7 +111,7 @@ def main():
 
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
-        dataset_val = get_dataset(dataset, is_train=False, max_data_num=args.max_val_num)
+        dataset_val = get_dataset(dataset, is_train=False)
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
         elif args.select_method == "align_embedding":
@@ -136,7 +136,7 @@ def main():
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
                 with torch.no_grad():
-                    with torch.cuda.amp.autocast():
+                    with torch.autocast():
                         past_key_values = model(
                             input_ids=demo_encoding.unsqueeze(0).to(device), 
                             use_cache=True
@@ -149,7 +149,7 @@ def main():
 
                 all_past_key_values.append(past_key_values_cpu)
 
-            past_key_values = select_past_key_value(all_past_key_values, 1, torch.ones(demo_encoding_batch.shape))
+            past_key_values = select_past_key_value(all_past_key_values)
             acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch))
             acc_list.append(acc)
             print(acc)

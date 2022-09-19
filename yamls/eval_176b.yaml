@@ -11,6 +11,7 @@ environment:
     - pip install datasets accelerate matplotlib bitsandbytes --user
     - pip uninstall enum34
     - pip install git+https://github.com/huggingface/transformers.git --user
+    # - pip install git+https://github.com/microsoft/DeepSpeed.git --user
 
 code:
   local_dir: $CONFIG_DIR/../
@@ -22,27 +23,27 @@ storage:
 
 search:
   job_template:
-    name: many-{task}-chunk{k}-{method}-{model}
+    name: many-{task}-chunk{k}-{method}-bloom
     sku: G4
     priority: High
     command:
-    - python3 -W ignore eval_many.py --chunk_num {k} --task {task} --model {model} --int8
+    - python3 eval_many.py --chunk_num {k} --task {task}
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many.json
+     --log_path /mnt/yutao/core-shot/log/{task}_{k}_bloom_many_{dtype}.json
   
   type: grid
   max_trials: 500
   params:
     - name: k
       spec: discrete
-      values: [1, 3, 6]
+      values: [1, 3]
     - name: task
       spec: discrete
       values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "copa"]
-      # values: ["dbpedia", "boolq", "rte", "cb", "agnews", "sst2", "sst5", "trec", "subj", "hellaswag", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
-    - name: model
+    - name: dtype
       spec: discrete
-      values: ["bloom"]
+      values: ["float16", "int8"]
+      # values: ["dbpedia", "boolq", "rte", "cb", "agnews", "sst2", "sst5", "trec", "subj", "hellaswag", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
 
   
   
