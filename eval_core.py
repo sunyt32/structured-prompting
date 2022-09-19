@@ -4,7 +4,7 @@ import json
 
 import torch
 
-from models import BloomForCausalLM
+from models.bloom.modeling_bloom import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
@@ -111,7 +111,7 @@ def main():
 
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
-        dataset_val = get_dataset(dataset, is_train=False)
+        dataset_val = get_dataset(dataset, is_train=False, max_data_num=args.max_val_num)
         if args.select_method == "align_feature":
             selector = AlignFeature(args, model, tokenizer, device, dataset_train, dataset_val)
         elif args.select_method == "align_embedding":

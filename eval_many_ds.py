@@ -13,8 +13,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from dataset import get_dataset, dataset_dict
 
 from utils.misc import init_distributed_mode
-from utils.functional import select_past_key_value
 
+def select_past_key_value(past_key_value):
+    present = ()
+    for layer_past in zip(*past_key_value):
+        key, value = tuple(zip(*layer_past))
+        key = torch.cat(key, dim=0)
+        value = torch.cat(value, dim=0)
+        present += ((key, value), )
+
+    return present
 
 @torch.no_grad()
 def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
@@ -73,11 +81,8 @@ def main():
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--max_train_num', type=int, default=4096)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
-    parser.add_argument('--coreset_size', type=int, default=4096)
     parser.add_argument('--chunk_num', type=int, default=1)
     args = parser.parse_args()
 
@@ -91,11 +96,11 @@ def main():
 
     deepspeed.init_distributed('nccl')
     with deepspeed.OnDevice(dtype=torch.float16, device='meta'):
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM._from_config(config, torch_dtype=torch.float16)
-        else:
-            model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.float16)
-
+        # if args.model.startswith('bloom'):
+        #     model = BloomForCausalLM._from_config(config, torch_dtype=torch.bfloat16)
+        # else:
+        model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    
     model.eval()
     model = deepspeed.init_inference(model,
         mp_size=args.world_size,
@@ -104,7 +109,7 @@ def main():
         replace_with_kernel_inject=True,
         base_dir=model_path
     )
-    model = model.module
+    # model = model.module
     deepspeed.runtime.utils.see_memory_usage('pre-ds-inference-init', force=True)
     device = torch.cuda.current_device()
     print("Model initialized.")

@@ -29,7 +29,6 @@ class BaseTask(Dataset):
             self.label_count[example[2]] += 1
             self.examples.append(example)
  
-<<<<<<< HEAD
         if self.max_data_num is not None and self.max_data_num < len(self.examples): # truncate dataset
             num_each_label_float = torch.Tensor(self.label_count) / len(self.examples) * self.max_data_num
             num_each_label = num_each_label_float.long()
@@ -48,13 +47,6 @@ class BaseTask(Dataset):
                     num_each_label_count[label] += 1
             
             self.examples = new_examples
-=======
-        if self.max_data_num is not None and self.max_data_num < len(self.examples):
-            next_seed = random.randint(0, 1e6)
-            random.seed(0) # ensure the dataset's examples are same among different seeds
-            self.examples = random.sample(self.examples, self.max_data_num)
-            random.seed(next_seed)
->>>>>>> origin
 
     def get_demo_from_indices(self, indices):
         demo_str = ""
