@@ -742,6 +742,7 @@ class BloomModel(BloomPreTrainedModel):
         if prefix_parallel is not None and prefix_parallel > 1:
             current_sequence_length = hidden_states.shape[1]
             hidden_states = hidden_states.repeat(1, prefix_parallel, 1)
+            print(hidden_states.shape, current_sequence_length, alibi.shape)
             alibi = torch.cat((alibi, alibi[:, :, :, -current_sequence_length:].repeat(1, 1, 1, prefix_parallel - 1)), dim=-1)
             causal_mask = torch.cat((causal_mask, causal_mask[:, :, :, -current_sequence_length:].repeat(1, 1, 1, prefix_parallel - 1)), dim=-1)
             causal_mask = causal_mask.repeat(1, 1, prefix_parallel, 1)
@@ -809,7 +810,7 @@ class BloomModel(BloomPreTrainedModel):
                         hidden_states = hidden_states.to("cuda:" + str(k + 1))
 
         if prefix_parallel is not None and prefix_parallel > 1:
-            hidden_states = hidden_states[:current_sequence_length]
+            hidden_states = hidden_states[:, :current_sequence_length]
         # Add last hidden state
         hidden_states = self.ln_f(hidden_states)
 
