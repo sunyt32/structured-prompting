@@ -7,14 +7,22 @@ import torch.distributed as dist
 
 import deepspeed
 
-from models.bloom import BloomForCausalLM, BloomBlock
+from models.bloom.modeling_bloom_ds import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from dataset import get_dataset, dataset_dict
 
 from utils.misc import init_distributed_mode
-from utils.functional import select_past_key_value
 
+def select_past_key_value(past_key_value):
+    present = ()
+    for layer_past in zip(*past_key_value):
+        key, value = tuple(zip(*layer_past))
+        key = torch.cat(key, dim=0)
+        value = torch.cat(value, dim=0)
+        present += ((key, value), )
+
+    return present
 
 @torch.no_grad()
 def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
@@ -49,8 +57,8 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
                     prefix_parallel=chunk_num
                     ).logits
 
-                logits = logits[0, (input_encoding.shape[1] - 1): -1].log_softmax(dim=-1)
-                # select answer
+                logits = logits[0, (input_encoding.shape[1] - 1): -1]
+                logits = torch.log_softmax(logits, dim=-1)                # select answer
                 logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
@@ -73,11 +81,8 @@ def main():
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
     # Parameters
-    parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--max_train_num', type=int, default=4096)
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
-    parser.add_argument('--coreset_size', type=int, default=4096)
     parser.add_argument('--chunk_num', type=int, default=1)
     args = parser.parse_args()
 
@@ -89,25 +94,22 @@ def main():
         use_fast=False)
     config = AutoConfig.from_pretrained(model_path)
 
-    # model = BloomForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16)
-
     deepspeed.init_distributed('nccl')
-    with deepspeed.OnDevice(dtype=torch.bfloat16, device='meta'):
-        if args.model.startswith('bloom'):
-            model = BloomForCausalLM._from_config(config, torch_dtype=torch.bfloat16)
-        else:
-            model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
-
+    with deepspeed.OnDevice(dtype=torch.float16, device='meta'):
+        # if args.model.startswith('bloom'):
+        #     model = BloomForCausalLM._from_config(config, torch_dtype=torch.bfloat16)
+        # else:
+        model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    
     model.eval()
     model = deepspeed.init_inference(model,
         mp_size=args.world_size,
         dtype=torch.float16,
         checkpoint=os.path.join(model_path, 'ds_inference_config.json'),
-        injection_policy={BloomBlock: ('self_attention.dense', 'mlp.dense_4h_to_h')},
-        # replace_with_kernel_inject=True,
+        replace_with_kernel_inject=True,
         base_dir=model_path
     )
-    model = model.module
+    # model = model.module
     deepspeed.runtime.utils.see_memory_usage('pre-ds-inference-init', force=True)
     device = torch.cuda.current_device()
     print("Model initialized.")
@@ -118,7 +120,7 @@ def main():
         dataset_list = dataset_dict.keys()
 
     for dataset in dataset_list:
-        dataset_train = get_dataset(dataset, is_train=True, max_data_num=args.max_train_num)
+        dataset_train = get_dataset(dataset, is_train=True)
         dataset_val = get_dataset(dataset, is_train=False)
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
