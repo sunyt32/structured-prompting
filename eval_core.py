@@ -136,11 +136,7 @@ def main():
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
                 with torch.no_grad():
-<<<<<<< HEAD
                     with torch.autocast(device_type="cuda"):
-=======
-                    with torch.autocast():
->>>>>>> origin
                         past_key_values = model(
                             input_ids=demo_encoding.unsqueeze(0).to(device), 
                             use_cache=True
