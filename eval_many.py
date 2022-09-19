@@ -4,7 +4,7 @@ import json
 
 import torch
 
-from models import BloomForCausalLM
+from models.bloom.modeling_bloom import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
