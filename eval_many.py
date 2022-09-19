@@ -88,6 +88,7 @@ def main():
         device = torch.cuda.current_device()
     else:
         device = torch.device("cpu")
+        
     if args.dtype == "int8":
         max_memory_mapping = {i: "24000MB" for i in range(8)}
         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
@@ -128,7 +129,7 @@ def main():
 
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
-                with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
+                with torch.autocast(device_type="cuda", enabled=not (args.dtype=="int8")):
                     with torch.no_grad():
                         past_key_values = model(
                             input_ids=demo_encoding.unsqueeze(0).to(device), 

@@ -33,6 +33,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
+from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
 from .configuration_bloom import BloomConfig
 
 
@@ -587,10 +588,44 @@ class BloomModel(BloomPreTrainedModel):
         # Final Layer Norm
         self.ln_f = LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
+        # Model parallel
+        self.model_parallel = False
+        self.device_map = None
         self.gradient_checkpointing = False
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    def parallelize(self, device_map=None):
+        # Check validity of device_map
+        self.device_map = (
+            get_device_map(len(self.h), range(torch.cuda.device_count())) if device_map is None else device_map
+        )
+        assert_device_map(self.device_map, len(self.h))
+        self.model_parallel = True
+        self.first_device = "cpu" if "cpu" in self.device_map.keys() else "cuda:" + str(min(self.device_map.keys()))
+        self.last_device = "cuda:" + str(max(self.device_map.keys()))
+        self.word_embeddings = self.word_embeddings.to(self.first_device)
+        self.word_embeddings_layernorm = self.word_embeddings_layernorm.to(self.first_device)
+        # Load onto devices
+        for k, v in self.device_map.items():
+            for block in v:
+                cuda_device = "cuda:" + str(k)
+                self.h[block] = self.h[block].to(cuda_device)
+        # ln_f to last
+        self.ln_f = self.ln_f.to(self.last_device)
+
+    def deparallelize(self):
+        self.model_parallel = False
+        self.device_map = None
+        self.first_device = "cpu"
+        self.last_device = "cpu"
+        self.word_embeddings = self.word_embeddings.to("cpu")
+        self.word_embeddings_layernorm = self.word_embeddings_layernorm.to("cpu")
+        for index in range(len(self.h)):
+            self.h[index] = self.h[index].to("cpu")
+        self.ln_f = self.ln_f.to("cpu")
+        torch.cuda.empty_cache()
 
     def get_input_embeddings(self):
         return self.word_embeddings
@@ -689,7 +724,7 @@ class BloomModel(BloomPreTrainedModel):
         seq_length_with_past = seq_length
         past_key_values_length = 0
         if past_key_values[0] is not None:
-            past_key_values_length = past_key_values[0][0].shape[2]
+            past_key_values_length = past_key_values[0][0].shape[1]
             seq_length_with_past = seq_length_with_past + past_key_values_length
         if attention_mask is None:
             attention_mask = torch.ones((batch_size, seq_length_with_past), device=hidden_states.device)
@@ -706,12 +741,24 @@ class BloomModel(BloomPreTrainedModel):
 
         if prefix_parallel is not None and prefix_parallel > 1:
             current_sequence_length = hidden_states.shape[1]
-            hidden_states = hidden_states.expand(-1, prefix_parallel, -1)
-            alibi = torch.cat((alibi, alibi[:, :, :, -current_sequence_length:].expand(-1, -1, -1, prefix_parallel - 1)), dim=-1)
-            causal_mask = torch.cat((causal_mask, causal_mask[:, :, :, -current_sequence_length:].expand(-1, -1, -1, prefix_parallel - 1)), dim=-1)
-            causal_mask = causal_mask.expand(-1, -1, prefix_parallel, -1)
+            hidden_states = hidden_states.repeat(1, prefix_parallel, 1)
+            alibi = torch.cat((alibi, alibi[:, :, :, -current_sequence_length:].repeat(1, 1, 1, prefix_parallel - 1)), dim=-1)
+            causal_mask = torch.cat((causal_mask, causal_mask[:, :, :, -current_sequence_length:].repeat(1, 1, 1, prefix_parallel - 1)), dim=-1)
+            causal_mask = causal_mask.repeat(1, 1, prefix_parallel, 1)
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
+
+            if self.model_parallel:
+                torch.cuda.set_device(hidden_states.device)
+                # Ensure that attention_mask is always on the same device as hidden_states
+                causal_mask = causal_mask.to(hidden_states.device)
+                alibi = alibi.to(hidden_states.device)
+            # Ensure layer_past is on same device as hidden_states (might not be correct)
+            if layer_past is not None:
+                layer_past = tuple(past_state.to(hidden_states.device) for past_state in layer_past)
+            
+            if isinstance(head_mask, torch.Tensor):
+                head_mask = head_mask.to(hidden_states.device)
 
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -756,6 +803,11 @@ class BloomModel(BloomPreTrainedModel):
             if output_attentions:
                 all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
 
+            if self.model_parallel:
+                for k, v in self.device_map.items():
+                    if i == v[-1] and "cuda:" + str(k) != self.last_device:
+                        hidden_states = hidden_states.to("cuda:" + str(k + 1))
+
         if prefix_parallel is not None and prefix_parallel > 1:
             hidden_states = hidden_states[:current_sequence_length]
         # Add last hidden state
@@ -790,8 +842,30 @@ class BloomForCausalLM(BloomPreTrainedModel):
         self.transformer = BloomModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
+        # Model parallel
+        self.model_parallel = False
+        self.device_map = None
+
         # Initialize weights and apply final processing
         self.post_init()
+
+    def parallelize(self, device_map=None):
+        self.device_map = (
+            get_device_map(len(self.transformer.h), range(torch.cuda.device_count()))
+            if device_map is None
+            else device_map
+        )
+        assert_device_map(self.device_map, len(self.transformer.h))
+        self.transformer.parallelize(self.device_map)
+        self.lm_head = self.lm_head.to(self.transformer.first_device)
+        self.model_parallel = True
+
+    def deparallelize(self):
+        self.transformer.deparallelize()
+        self.transformer = self.transformer.to("cpu")
+        self.lm_head = self.lm_head.to("cpu")
+        self.model_parallel = False
+        torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -870,6 +944,10 @@ class BloomForCausalLM(BloomPreTrainedModel):
             return_dict=return_dict,
         )
         hidden_states = transformer_outputs[0]
+        
+        if self.model_parallel:
+            torch.cuda.set_device(self.transformer.first_device)
+            hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
 

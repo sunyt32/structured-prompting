@@ -28,7 +28,7 @@ search:
     command:
     - python3 eval_core.py --coreset_size {k} --task {task} --model {model} --chunk --parallel
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{method}.json
+     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{method}_repeat.json
      --select_method {method}
   
   type: grid
@@ -39,7 +39,8 @@ search:
       values: [1024]
     - name: task
       spec: discrete
-      values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
+      values: ["trec"]
+      # values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
       # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete

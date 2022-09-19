@@ -4,7 +4,7 @@ import json
 
 import torch
 
-from models.bloom.modeling_bloom import BloomForCausalLM
+from models.bloom.modeling_bloom_ds import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
@@ -52,6 +52,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num):
                 logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].mean()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
 
+        print(all_logits)
         preds = all_logits.argmax(dim=-1)
         correct += int(preds.item() == answer)
         total += 1
