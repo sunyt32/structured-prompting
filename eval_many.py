@@ -88,7 +88,6 @@ def main():
         device = torch.cuda.current_device()
     else:
         device = torch.device("cpu")
-        
     if args.dtype == "int8":
         max_memory_mapping = {i: "24000MB" for i in range(8)}
         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)

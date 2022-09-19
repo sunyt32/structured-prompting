@@ -710,9 +710,7 @@ class BloomModel(BloomPreTrainedModel):
             attention_mask = attention_mask.to(hidden_states.device)
 
         alibi = build_alibi_tensor(attention_mask, self.n_head, hidden_states.dtype, hidden_states.device, past_key_values_length, prefix_parallel)
-
         attention_mask = self._prepare_bloom_attn_mask(attention_mask, input_shape, past_key_values_length)
-
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
 
             if self.model_parallel:
