@@ -50,9 +50,9 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
                 logits = logits[0, (input_encoding.shape[1] - 1): -1]
                 logits = torch.log_softmax(logits, dim=-1)
                 # select answer
-                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].mean()
+                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
-
+       
         preds = all_logits.argmax(dim=-1)
         correct += int(preds.item() == answer)
         total += 1
@@ -88,7 +88,6 @@ def main():
         device = torch.cuda.current_device()
     else:
         device = torch.device("cpu")
-
     if args.dtype == "int8":
         max_memory_mapping = {i: "24000MB" for i in range(8)}
         model = BloomForCausalLM.from_pretrained(model_path, device_map='auto', load_in_8bit=True, max_memory=max_memory_mapping)
@@ -129,7 +128,7 @@ def main():
 
             all_past_key_values = []
             for demo_encoding in demo_encoding_batch:
-                with torch.autocast(device_type="cuda", enabled=not (args.dtype=="int8")):
+                with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
                     with torch.no_grad():
                         past_key_values = model(
                             input_ids=demo_encoding.unsqueeze(0).to(device), 
