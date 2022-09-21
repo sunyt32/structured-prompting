@@ -50,7 +50,7 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
                 logits = logits[0, (input_encoding.shape[1] - 1): -1]
                 logits = torch.log_softmax(logits, dim=-1)
                 # select answer
-                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].mean()
+                logits = logits[torch.arange(logits.shape[0]).to(device), candidate_encoding.flatten()].sum()
                 all_logits = torch.cat((all_logits, logits.unsqueeze(0)), dim=0)
        
         preds = all_logits.argmax(dim=-1)
