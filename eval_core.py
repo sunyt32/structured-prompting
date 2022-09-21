@@ -8,7 +8,7 @@ from models.bloom.modeling_bloom import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
-from coreset import AlignFeature, RandomSelector, LossPartition, LossSampling, AlignEmbedding
+from coreset import AlignFeature, RandomSelector, LossPartition, LossSampling, AlignEmbedding, VoteK
 from utils.functional import select_past_key_value
 
 
@@ -117,6 +117,8 @@ def main():
             selector = LossPartition(args, model, tokenizer, device, dataset_train)
         elif args.select_method == "loss_sampling":
             selector = LossSampling(args, model, tokenizer, device, dataset_train)
+        elif args.select_method == "votek":
+            selector = VoteK(device, dataset_train)
         elif args.select_method == "random":
             selector = RandomSelector(dataset_train)
         else:

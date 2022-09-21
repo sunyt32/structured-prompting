@@ -11,6 +11,7 @@ environment:
     - pip install datasets accelerate matplotlib bitsandbytes --user
     - pip uninstall enum34
     - pip install git+https://github.com/huggingface/transformers.git --user
+    - pip install sentence_transformers --user
 
 code:
   local_dir: $CONFIG_DIR/../
@@ -36,14 +37,14 @@ search:
   params:
     - name: k
       spec: discrete
-      values: [1024]
+      values: [512]
     - name: task
       spec: discrete
       values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
       # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
-      values: ["random"]
+      values: ["align_embedding"]
     - name: model
       spec: discrete
       values: ["bloom-1b7"]
