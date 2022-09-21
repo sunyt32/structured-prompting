@@ -30,16 +30,13 @@ search:
     sku: G8
     priority: High
     command:
-    - python3 eval_many.py --chunk_num {k} --task {task} --model bloom --shot {}
+    - python3 eval_many.py --task {task} --model bloom --shot {shot}
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_bloom_many_{shot}.json
+     --log_path /mnt/yutao/core-shot/log/{task}_few{shot}_bloom_many.json
   
   type: grid
   max_trials: 500
   params:
-    - name: k
-      spec: discrete
-      values: [1, 3, 5]
     - name: task
       spec: discrete
       values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "copa", "mr", "wsc", "obqa", "piqa", "hellaswag", "winogrande"]
