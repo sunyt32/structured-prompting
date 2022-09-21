@@ -2,6 +2,8 @@ from . import CoreSet
 from utils import validate
 from utils.kmeans import KMeans
 
+import random
+
 import torch
 
 
@@ -33,9 +35,9 @@ class AlignEmbedding(CoreSet):
                 all_embeddings = torch.cat((all_embeddings, hidden_states), dim=0)
 
         self.all_embeddings = all_embeddings
-        metric = len(all_embeddings) * all_embeddings.square().sum(dim=1) - 2 * all_embeddings.mul(all_embeddings.sum(dim=0)).sum(dim=1)
+        metric = len(all_embeddings) * all_embeddings.square().mean(dim=1) - 2 * all_embeddings.mul(all_embeddings.sum(dim=0)).mean(dim=1)
         _, indices = torch.sort(metric, dim=0)
-        self.indices = indices[:args.coreset_size].cpu().tolist()
+        self.indices = indices.cpu().tolist()[:args.coreset_size]
 
     def templates(self):
         return [
@@ -49,9 +51,7 @@ class AlignEmbedding(CoreSet):
         if self.val:
             acc_max = 0
             for _ in range(10):
-                kmeans = KMeans(demo_num, device=self.device, max_iter=100)
-                kmeans.fit(self.all_embeddings)
-                indices = kmeans.representative_samples
+                indices = random.sample(self.indices, demo_num)
                 self.dataset_train.demo = self.dataset_train.get_demo_from_indices(indices)
                 acc = validate(self.model, self.dataset_train, self.tokenizer, self.device)
                 if acc > acc_max:
@@ -59,10 +59,6 @@ class AlignEmbedding(CoreSet):
                     best_indices = indices
 
             return best_indices
-
         else:
-            kmeans = KMeans(demo_num, device=self.device, max_iter=100)
-            kmeans.fit(self.all_embeddings)
-            indices = kmeans.representative_samples
-            return indices
+            return super().get_demo_indices(demo_num)
 

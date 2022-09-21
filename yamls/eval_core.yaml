@@ -39,8 +39,7 @@ search:
       values: [1024]
     - name: task
       spec: discrete
-      values: ["trec"]
-      # values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
+      values: ["sst2", "sst5", "trec", "subj", "piqa", "mr",  "arce"]
       # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete

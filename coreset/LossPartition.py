@@ -14,7 +14,6 @@ class LossPartition(CoreSet):
         model.eval()
         dataloader_train = DataLoader(dataset_train, 1, shuffle=False, collate_fn=lambda x: list(zip(*x)))
         criterion = CrossEntropyLoss(reduction='none')
-        print("Begin to calculate loss...")
         loss = torch.empty(0).to(device)
         for train_input_str, train_output_str, train_answer in dataloader_train:
             train_input_encoding = tokenizer(
@@ -62,9 +61,8 @@ class LossPartition(CoreSet):
     
     def get_demo_indices(self, demo_num):
         final_indices = []
-        for sub_indices in self.indices.chunk(16):
-            final_indices += random.sample(sub_indices, demo_num // 16)
+        for sub_indices in self.indices.chunk(64):
+            final_indices += random.sample(sub_indices.tolist(), demo_num // 64)
 
-        final_indices = [index.item() for index in final_indices]
         return final_indices
 

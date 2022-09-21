@@ -36,7 +36,7 @@ search:
   params:
     - name: k
       spec: discrete
-      values: [1024]
+      values: [512]
     - name: task
       spec: discrete
       # values: ["sst2", "sst5", "trec", "subj", "boolq", "hellaswag", "piqa", "copa", "winogrande", "dbpedia", "agnews", "rte", "cb", "mr", "arcc", "arce", "obqa"]
