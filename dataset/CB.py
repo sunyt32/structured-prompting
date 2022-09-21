@@ -13,10 +13,10 @@ class CB(BaseTask):
 
     def templates_set_without_newline(self):
         return [
+            ("Read the following paragraph and determine if the hypothesis is true: {premise} Hypothesis: {hypothesis}. ", "{answer}", ["Yes", "No", "Maybe"]),
             ("{premise} Based on the paragraph above can we conclude that \"{hypothesis}\"? Yes, No, or Maybe? Answer: ", " {answer}", ["Yes", "No", "Maybe"]),
             ("{premise} Can we infer the following? {hypothesis}. ", "{answer}", ["Yes", "No", "Maybe"]),
             ("{premise} Question: {hypothesis}. True, False, or Neither? Answer: ", "{answer}", ["True", "False", "Neither"]),
-            ("Read the following paragraph and determine if the hypothesis is true: {premise} Hypothesis: {hypothesis}. ", "{answer}", ["Yes", "No", "Maybe"]),
             ("Can we draw the following hypothesis from the context? Context: {premise} Hypothesis: {hypothesis}. Answer: ", "{answer}", ["Yes", "No", "Maybe"])
         ]
 

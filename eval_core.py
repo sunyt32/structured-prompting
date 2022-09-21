@@ -4,7 +4,7 @@ import json
 
 import torch
 
-from models.bloom.modeling_bloom_ds import BloomForCausalLM
+from models.bloom.modeling_bloom import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
@@ -91,9 +91,6 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(
         model_path, 
         use_fast=False)
-
-    model.config.pad_token_id = model.config.eos_token_id
-    tokenizer.pad_token = tokenizer.eos_token
     
     if args.parallelize:
         model.parallelize()

@@ -1,17 +1,20 @@
 description: Evaluate core-shot in-context setting
 
 target:
-  service: sing
-  name: gcrprojvc1
-  resource_group: gcr-singularity-proj1
+  service: amlk8s
+  name: a100-80gb-cus
+  vc: TuringNLP
 
 environment:
-  image: amlt-sing/pytorch-1.11.0
+  image: itp/torch1.9-cuda11.3-base:latest
+  registry: shumingdocker.azurecr.io
   setup:
+    - pip install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/cu113
     - pip install datasets accelerate matplotlib bitsandbytes --user
     - pip uninstall enum34
     - pip install git+https://github.com/huggingface/transformers.git --user
     # - pip install git+https://github.com/microsoft/DeepSpeed.git --user
+  username: shumingdocker
 
 code:
   local_dir: $CONFIG_DIR/../
@@ -24,7 +27,7 @@ storage:
 search:
   job_template:
     name: many-{task}-chunk{k}-{method}-bloom
-    sku: G4
+    sku: G8
     priority: High
     command:
     - python3 eval_many.py --chunk_num {k} --task {task} --model bloom --dtype {dtype}
