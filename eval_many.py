@@ -65,7 +65,6 @@ def main():
     parser = argparse.ArgumentParser()
     # Model setting
     parser.add_argument('--model', type=str, default="bloom")
-    parser.add_argument('--device', type=str, default="cuda:0")
     parser.add_argument('--dtype', type=str, default="float16")
     parser.add_argument('--parallel', action='store_true')
     # Data setting
@@ -76,6 +75,7 @@ def main():
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
     parser.add_argument('--chunk_num', type=int, default=1)
+    parser.add_argument('--shot', type=int)
     args = parser.parse_args()
 
     model_path = os.path.join(args.data_path, "model", args.model)
@@ -119,30 +119,34 @@ def main():
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
         for _ in range(args.repeat_num):
-            demo_encoding_batch = dataset_train.get_chunk(tokenizer, demo_max_length, chunk_num=args.chunk_num)
+            demo_encoding_batch = dataset_train.get_chunk(tokenizer, demo_max_length, chunk_num=args.chunk_num, shot=args.shot)
             demo_encoding_batch = torch.LongTensor(demo_encoding_batch)
             print(demo_encoding_batch.shape)
             if args.chunk_num is not None and demo_encoding_batch.shape[0] < args.chunk_num:
                 print("The dataset's maximal chunk {} < {}!".format(demo_encoding_batch.shape[0], args.chunk_num))
                 exit()
 
-            all_past_key_values = []
-            for demo_encoding in demo_encoding_batch:
-                with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
-                    with torch.no_grad():
-                        past_key_values = model(
-                            input_ids=demo_encoding.unsqueeze(0).to(device), 
-                            use_cache=True
-                        ).past_key_values
+            if demo_encoding_batch.shape[1] > 0:
+                all_past_key_values = []
+                for demo_encoding in demo_encoding_batch:
+                    with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
+                        with torch.no_grad():
+                            past_key_values = model(
+                                input_ids=demo_encoding.unsqueeze(0).to(device), 
+                                use_cache=True
+                            ).past_key_values
 
-                past_key_values_cpu = ()
-                for layer_past in past_key_values:
-                    layer_past = tuple(past_state.cpu() for past_state in layer_past)
-                    past_key_values_cpu = past_key_values_cpu + (layer_past, )
+                    past_key_values_cpu = ()
+                    for layer_past in past_key_values:
+                        layer_past = tuple(past_state.cpu() for past_state in layer_past)
+                        past_key_values_cpu = past_key_values_cpu + (layer_past, )
 
-                all_past_key_values.append(past_key_values_cpu)
+                    all_past_key_values.append(past_key_values_cpu)
 
-            past_key_values = select_past_key_value(all_past_key_values)
+                past_key_values = select_past_key_value(all_past_key_values)
+            else: # zero-shot
+                past_key_values = None
+
             acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.dtype == "int8")
             acc_list.append(acc)
             print(acc)

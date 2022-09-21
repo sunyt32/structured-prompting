@@ -118,7 +118,7 @@ def main():
         elif args.select_method == "loss_sampling":
             selector = LossSampling(args, model, tokenizer, device, dataset_train)
         elif args.select_method == "votek":
-            selector = VoteK(device, dataset_train)
+            selector = VoteK(args, model, tokenizer, device, dataset_train)
         elif args.select_method == "random":
             selector = RandomSelector(dataset_train)
         else:

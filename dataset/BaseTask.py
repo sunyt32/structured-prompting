@@ -65,11 +65,14 @@ class BaseTask(Dataset):
                 padding=True
             ).input_ids[0]) for input_str, output_str, _ in self.examples)
 
-    def get_chunk(self, tokenizer, max_length, indices=None, chunk_num=None):
+    def get_chunk(self, tokenizer, max_length, indices=None, shot=None, chunk_num=None):
         if indices is None:
             indices = list(range(len(self.examples)))
             random.shuffle(indices)
 
+        if shot is not None:
+            indices = random.sample(indices, shot)
+            
         demo_encoding_batch = []
         demo_encoding = []
         for index in indices:

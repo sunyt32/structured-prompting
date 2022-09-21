@@ -44,7 +44,7 @@ search:
       # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
     - name: method
       spec: discrete
-      values: ["align_embedding"]
+      values: ["votek"]
     - name: model
       spec: discrete
       values: ["bloom-1b7"]
