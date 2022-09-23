@@ -9,11 +9,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dataset import get_dataset, dataset_dict
 
-from utils.functional import select_past_key_value
+from utils.functional import select_past_key_value, setup_seed
 
 
 @torch.no_grad()
-def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8):
+def validate(model, dataset, tokenizer, device, past_key_values, past_attention_mask, chunk_num, int8):
     correct = 0
     total = 0
     for input_str, output_str, answer in dataset:
@@ -27,9 +27,11 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
             return_tensors='pt',
         ).to(device)
         if answer_encoding.input_ids.shape[1] == 1: # classification
+            attention_mask = torch.cat((past_attention_mask, torch.ones(input_encoding.shape, device=device)), dim=1)
             with torch.autocast(device_type="cuda", enabled=not int8):
                 logits = model(
                     input_ids=input_encoding,
+                    attention_mask=attention_mask,
                     past_key_values=past_key_values,
                     prefix_parallel=chunk_num
                     ).logits
@@ -40,9 +42,12 @@ def validate(model, dataset, tokenizer, device, past_key_values, chunk_num, int8
             all_logits = torch.empty(0).to(device)
             for candidate_encoding, candidate_mask in zip(answer_encoding.input_ids, answer_encoding.attention_mask):
                 candidate_encoding = candidate_encoding[torch.where(candidate_mask)].unsqueeze(0)
+                multi_encoding = torch.cat((input_encoding, candidate_encoding), dim=1)
+                attention_mask = torch.cat((past_attention_mask, torch.ones(multi_encoding.shape, device=device)), dim=1)
                 with torch.autocast(device_type="cuda", enabled=not int8):
                     logits = model(
-                        input_ids=torch.cat((input_encoding, candidate_encoding), dim=1),
+                        input_ids=multi_encoding,
+                        attention_mask=attention_mask,
                         past_key_values=past_key_values,
                         prefix_parallel=chunk_num
                         ).logits
@@ -69,6 +74,7 @@ def main():
     parser.add_argument('--parallel', action='store_true')
     # Data setting
     parser.add_argument('--task', type=str)
+    parser.add_argument('--strategy', type=str, default="truncate")
     parser.add_argument('--data_path', type=str, default="./data")
     parser.add_argument('--log_path', type=str)
     # Parameters
@@ -118,9 +124,11 @@ def main():
         dataset_val = get_dataset(dataset, is_train=False)
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
-        for _ in range(args.repeat_num):
-            demo_encoding_batch = dataset_train.get_chunk(tokenizer, demo_max_length, chunk_num=args.chunk_num, shot=args.shot)
-            demo_encoding_batch = torch.LongTensor(demo_encoding_batch)
+        for seed in range(args.repeat_num):
+            setup_seed(seed)
+            demo_encoding_batch, attention_mask_batch, num_examples = dataset_train.get_chunk(tokenizer, demo_max_length, padding=(args.strategy=="padding"), chunk_num=args.chunk_num, shot=args.shot)
+            demo_encoding_batch = torch.LongTensor(demo_encoding_batch).to(device)
+            attention_mask_batch = torch.LongTensor(attention_mask_batch).to(device)
             print(demo_encoding_batch.shape)
             if args.chunk_num is not None and demo_encoding_batch.shape[0] < args.chunk_num:
                 print("The dataset's maximal chunk {} < {}!".format(demo_encoding_batch.shape[0], args.chunk_num))
@@ -128,11 +136,12 @@ def main():
 
             if demo_encoding_batch.shape[1] > 0:
                 all_past_key_values = []
-                for demo_encoding in demo_encoding_batch:
+                for demo_encoding, attention_mask in zip(demo_encoding_batch, attention_mask_batch):
                     with torch.autocast(device_type="cuda", enabled=not (args.dtype == "int8")):
                         with torch.no_grad():
                             past_key_values = model(
-                                input_ids=demo_encoding.unsqueeze(0).to(device), 
+                                input_ids=demo_encoding.unsqueeze(0),
+                                attention_mask=attention_mask.unsqueeze(0),
                                 use_cache=True
                             ).past_key_values
 
@@ -147,12 +156,15 @@ def main():
             else: # zero-shot
                 past_key_values = None
 
-            acc = validate(model, dataset_val, tokenizer, device, past_key_values, len(demo_encoding_batch), args.dtype == "int8")
-            acc_list.append(acc)
+            acc = validate(model, dataset_val, tokenizer, device, past_key_values, attention_mask_batch.view(1, -1), len(demo_encoding_batch), args.dtype == "int8")
+            acc_list.append({
+                "acc": acc,
+                "num_examples": num_examples
+            })
             print(acc)
  
         log_dict = {
-            "acc": torch.Tensor(acc_list).mean().item(),
+            "acc": torch.Tensor([item["acc"] for item in acc_list]).mean().item(),
             "details": acc_list
         }
 

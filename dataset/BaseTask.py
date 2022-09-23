@@ -65,7 +65,8 @@ class BaseTask(Dataset):
                 padding=True
             ).input_ids[0]) for input_str, output_str, _ in self.examples)
 
-    def get_chunk(self, tokenizer, max_length, indices=None, shot=None, chunk_num=None):
+    def get_chunk(self, tokenizer, max_length, padding=False, indices=None, shot=None, chunk_num=None):
+        num_examples = 0
         if indices is None:
             indices = list(range(len(self.examples)))
             random.shuffle(indices)
@@ -75,22 +76,31 @@ class BaseTask(Dataset):
             
         demo_encoding_batch = []
         demo_encoding = []
+        attention_mask_batch = []
         for index in indices:
             if chunk_num is not None and len(demo_encoding_batch) >= chunk_num:
                 break
 
             demo = self.get_demo_from_indices(index)
             demo_input_ids = tokenizer(demo).input_ids
+            num_examples += 1
             if len(demo_encoding) + len(demo_input_ids) <= max_length:
                 demo_encoding += demo_input_ids
             else:
-                demo_encoding_batch.append((demo_encoding + demo_input_ids)[-max_length:])
-                demo_encoding = []
+                if padding:
+                    demo_encoding_batch.append([0] * (max_length - len(demo_encoding)) + demo_encoding)
+                    attention_mask_batch.append([0] * (max_length - len(demo_encoding)) + [1] * len(demo_encoding))
+                    demo_encoding = demo_input_ids
+                else:
+                    demo_encoding_batch.append((demo_encoding + demo_input_ids)[-max_length:])
+                    attention_mask_batch.append([1] * max_length)
+                    demo_encoding = []
 
         if len(demo_encoding_batch) == 0: # doesn't need chunk!
             demo_encoding_batch.append(demo_encoding)
+            attention_mask_batch.append([1] * len(demo_encoding))
 
-        return demo_encoding_batch
+        return demo_encoding_batch, attention_mask_batch, num_examples
             
     def __len__(self):
         return len(self.examples)

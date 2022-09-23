@@ -23,26 +23,24 @@ storage:
 search:
   job_template:
     name: many-{task}-k{k}-{model}
-    sku: G4
+    sku: G8
     priority: High
     command:
     - python3 eval_many.py --chunk_num {k} --task {task} --model {model} --parallel
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many.json
+     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{strategy}.json
   
   type: grid
   max_trials: 500
   params:
     - name: k
       spec: discrete
-      values: [1, 3, 6]
+      values: [1, 3, 5]
     - name: task
       spec: discrete
-      values: ["rte", "cb", "sst2", "sst5", "trec", "subj", "copa"]
-      # values: ["boolq", "rte", "cb", "sst2", "sst5", "trec", "subj", "piqa", "copa", "winogrande", "mr", "arcc", "arce", "obqa"]
+      values: ["rte", "cb", "sst2", "sst5", "trec", "subj",  "mr", "obqa", "piqa"]
     - name: model
       spec: discrete
-      values: ["bloom-1b7"]
-
+      values: ["bloom-7b1"]
   
   

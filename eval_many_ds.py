@@ -7,7 +7,7 @@ import torch.distributed as dist
 
 import deepspeed
 
-from models.bloom.modeling_bloom_ds import BloomForCausalLM
+from models.bloom.modeling_bloom import BloomForCausalLM
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from dataset import get_dataset, dataset_dict

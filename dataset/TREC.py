@@ -21,6 +21,6 @@ class TREC(BaseTask):
         input_temp, output_temp, options = self.templates[self.temp_index]
         input_str = input_temp.replace("{text}", example["text"])
         answer_str = [output_temp.replace("{answer}", options[i]) for i in range(len(options))]
-        label = example["label-coarse"]
+        label = example["coarse_label"]
         return input_str, answer_str, label
 
