@@ -30,23 +30,25 @@ class BaseTask(Dataset):
             self.examples.append(example)
  
         if self.max_data_num is not None and self.max_data_num < len(self.examples): # truncate dataset
-            num_each_label_float = torch.Tensor(self.label_count) / len(self.examples) * self.max_data_num
-            num_each_label = num_each_label_float.long()
-            _, indices = torch.sort(num_each_label_float - num_each_label, descending=True)
-            for index in indices:
-                if num_each_label.sum().item() >= self.max_data_num:
-                    break
-                num_each_label[index] += 1
+            random.seed(1)
+            self.examples = random.sample(self.examples, self.max_data_num)
+            # num_each_label_float = torch.Tensor(self.label_count) / len(self.examples) * self.max_data_num
+            # num_each_label = num_each_label_float.long()
+            # _, indices = torch.sort(num_each_label_float - num_each_label, descending=True)
+            # for index in indices:
+            #     if num_each_label.sum().item() >= self.max_data_num:
+            #         break
+            #     num_each_label[index] += 1
 
-            num_each_label_count = [0 for _ in range(self.class_num)]
-            new_examples = []
-            for example in self.examples:
-                label = example[2]
-                if num_each_label_count[label] < num_each_label[label]:
-                    new_examples.append(example)
-                    num_each_label_count[label] += 1
+            # num_each_label_count = [0 for _ in range(self.class_num)]
+            # new_examples = []
+            # for example in self.examples:
+            #     label = example[2]
+            #     if num_each_label_count[label] < num_each_label[label]:
+            #         new_examples.append(example)
+            #         num_each_label_count[label] += 1
             
-            self.examples = new_examples
+            # self.examples = new_examples
 
     def get_demo_from_indices(self, indices):
         demo_str = ""
@@ -65,7 +67,7 @@ class BaseTask(Dataset):
                 padding=True
             ).input_ids[0]) for input_str, output_str, _ in self.examples)
 
-    def get_chunk(self, tokenizer, max_length, padding=False, indices=None, shot=None, chunk_num=None):
+    def get_chunk(self, tokenizer, max_length, strategy="truncate", indices=None, shot=None, chunk_num=None):
         num_examples = 0
         if indices is None:
             indices = list(range(len(self.examples)))
@@ -87,14 +89,22 @@ class BaseTask(Dataset):
             if len(demo_encoding) + len(demo_input_ids) <= max_length:
                 demo_encoding += demo_input_ids
             else:
-                if padding:
+                if strategy == "padding":
                     demo_encoding_batch.append([0] * (max_length - len(demo_encoding)) + demo_encoding)
                     attention_mask_batch.append([0] * (max_length - len(demo_encoding)) + [1] * len(demo_encoding))
                     demo_encoding = demo_input_ids
-                else:
+                elif strategy == "truncate":
                     demo_encoding_batch.append((demo_encoding + demo_input_ids)[-max_length:])
                     attention_mask_batch.append([1] * max_length)
                     demo_encoding = []
+                elif strategy == "blank":
+                    demo_encoding_batch.append(tokenizer(" ").input_ids * (max_length - len(demo_encoding)) + demo_encoding)
+                    attention_mask_batch.append([1] * max_length)
+                    demo_encoding = demo_input_ids
+                else:
+                    demo_encoding_batch.append(demo_encoding + [0] * (max_length - len(demo_encoding)) )
+                    attention_mask_batch.append([1] * len(demo_encoding) + [0] * (max_length - len(demo_encoding)))
+                    demo_encoding = demo_input_ids
 
         if len(demo_encoding_batch) == 0: # doesn't need chunk!
             demo_encoding_batch.append(demo_encoding)

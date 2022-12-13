@@ -12,7 +12,7 @@ class DBPedia(BaseTask):
 
     def templates_set_without_newline(self):
         return [
-            ("Input: {content} Type:", " {answer}", ["company", "school", "artist", "athlete", "politics", "transportation", "building", "nature", "village", "animal", "plant", "album", "film", "book"])
+            ("Input: {content} Type:", " {answer}", ["company", "school", "artist", "sport", "politics", "transportation", "building", "nature", "village", "animal", "plant", "album", "film", "book"])
         ]
 
     def preprocess_example(self, example):

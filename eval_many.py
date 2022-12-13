@@ -80,7 +80,7 @@ def main():
     # Parameters
     parser.add_argument('--repeat_num', type=int, default=5)
     parser.add_argument('--max_length', type=int, default=2000)
-    parser.add_argument('--chunk_num', type=int, default=1)
+    parser.add_argument('--chunk_num', type=int)
     parser.add_argument('--shot', type=int)
     args = parser.parse_args()
 
@@ -121,15 +121,15 @@ def main():
 
     for dataset in dataset_list:
         dataset_train = get_dataset(dataset, is_train=True)
-        dataset_val = get_dataset(dataset, is_train=False)
+        dataset_val = get_dataset(dataset, is_train=False, max_data_num=4000)
         acc_list = []
         demo_max_length = args.max_length - dataset_val.get_max_length(tokenizer)
         for seed in range(args.repeat_num):
             setup_seed(seed)
-            demo_encoding_batch, attention_mask_batch, num_examples = dataset_train.get_chunk(tokenizer, demo_max_length, padding=(args.strategy=="padding"), chunk_num=args.chunk_num, shot=args.shot)
+            demo_encoding_batch, attention_mask_batch, num_examples = dataset_train.get_chunk(tokenizer, demo_max_length, strategy=args.strategy, chunk_num=args.chunk_num, shot=args.shot)
             demo_encoding_batch = torch.LongTensor(demo_encoding_batch).to(device)
             attention_mask_batch = torch.LongTensor(attention_mask_batch).to(device)
-            print(demo_encoding_batch.shape)
+            print(dataset, demo_encoding_batch.shape, num_examples)
             if args.chunk_num is not None and demo_encoding_batch.shape[0] < args.chunk_num:
                 print("The dataset's maximal chunk {} < {}!".format(demo_encoding_batch.shape[0], args.chunk_num))
                 exit()

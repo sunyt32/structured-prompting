@@ -1,4 +1,4 @@
-description: Evaluate core-shot in-context setting
+description: Evaluate many-shot in-context setting
 
 target:
   service: sing
@@ -22,25 +22,28 @@ storage:
 
 search:
   job_template:
-    name: many-{task}-k{k}-{model}
+    name: many-{task}-k{k}-{model}-{strategy}
     sku: G8
     priority: High
     command:
-    - python3 eval_many.py --chunk_num {k} --task {task} --model {model} --parallel
+    - python3 eval_many.py --shot {k} --task {task} --model {model} --parallel --strategy {strategy}
      --data_path /mnt/yutao/data
-     --log_path /mnt/yutao/core-shot/log/{task}_{k}_{model}_many_{strategy}.json
+     --log_path /mnt/yutao/core-shot/log/{task}_ablation_{model}_many_{strategy}.json
   
   type: grid
   max_trials: 500
   params:
     - name: k
       spec: discrete
-      values: [1, 3, 5]
+      values: [50]
     - name: task
       spec: discrete
-      values: ["rte", "cb", "sst2", "sst5", "trec", "subj",  "mr", "obqa", "piqa"]
+      values: ["boolq"]
     - name: model
       spec: discrete
       values: ["bloom-7b1"]
+    - name: strategy
+      spec: discrete
+      values: ["left"]
   
   
