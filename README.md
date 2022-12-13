@@ -1,1 +1,1 @@
-# Coreset method for in-context learning
+# structured prompting for in-context learning
