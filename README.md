@@ -19,7 +19,7 @@ python3 eval_many.py \
   --parallel \ # activate model parallel
   --task sst2 \
   --strategy truncate \ # align method
-  --data_path ./data # pretrained model saved in ./data/model/bloom
+  --data_path ./data \ # pretrained model saved in ./data/model/bloom
   --chunk_num 5 \ desired chunk number
   --max_length 2000
 ```
